@@ -1,0 +1,195 @@
+---
+title: "Testing Spades Online: Unit, Integration, and WebSocket Tests"
+sidebarTitle: "Testing"
+description: "How to run the Spades Online test suite: unit tests (no external services), integration tests (PostgreSQL required), and WebSocket event tests."
+---
+
+The Spades Online test suite is organized into three layers: unit tests that cover pure game logic with no external service dependencies, integration tests that exercise real HTTP API routes against a live PostgreSQL database, and WebSocket tests that validate real-time event flows. All tests run via `npm test` using the Node.js built-in test runner — no additional test framework is required.
+
+## Running Tests
+
+```bash
+npm test
+```
+
+This runs `node --test 'test/**/*.test.js'`, which discovers and executes every test file matching the glob pattern.
+
+<Note>
+  **Unit tests always run.** Integration tests are automatically skipped when `DATABASE_URL` is not set in the environment. Integration tests that also require Redis are skipped when `REDIS_URL` is not set. You can run the full unit suite locally without any external services.
+</Note>
+
+To run tests with integration coverage, export the required connection strings first:
+
+```bash
+export DATABASE_URL="postgresql://user:password@localhost:5432/spades_test"
+export REDIS_URL="redis://localhost:6379"
+npm test
+```
+
+## Test Categories
+
+<CardGroup cols={2}>
+  <Card title="Unit Tests" icon="flask">
+    **Location:** `test/unit/`
+
+    Pure logic tests with no database or Redis dependency. Covers:
+
+    - **Game engine** — bidding logic, scoring, trick resolution, deck creation, and full game state machine (`test/unit/game/`)
+    - **Auth logic** — registration validation and credential checks (`test/unit/auth/`)
+    - **Web client** — form validation helpers and API client wrappers (`test/unit/web/`)
+    - **Lobby logic** — table creation and seat management (`test/unit/lobby/`)
+    - **Middleware** — rate limiter logic (`test/unit/middleware/`)
+
+    No `DATABASE_URL` or `REDIS_URL` required.
+  </Card>
+
+  <Card title="Integration Tests" icon="database">
+    **Location:** `test/integration/`
+
+    End-to-end HTTP route tests that hit real Express handlers backed by a live PostgreSQL database. Covers:
+
+    - **Auth routes** — register, verify email, login, logout, forgot/reset password (`test/integration/auth/`)
+    - **Social & friends routes** — player search, friend requests, blocks, presence (`test/integration/social/`)
+    - **Game routes** — table creation, seating, bidding, card play, state reads (`test/integration/game/`)
+
+    Requires `DATABASE_URL`. Game integration tests also require `REDIS_URL`.
+  </Card>
+
+  <Card title="WebSocket Tests" icon="bolt">
+    **Location:** `test/ws/`
+
+    Tests for real-time event flows over live WebSocket connections. Covers:
+
+    - **Connection & auth** — upgrade handshake, session validation, rejection of unauthenticated connections
+    - **Disconnect handling** — presence cleanup, session teardown
+    - **Table event flows** — `JOIN`, `LEAVE`, game event broadcasts to the table room
+    - **Lobby events** — `JOIN_LOBBY`, `TABLE_CREATED`, `TABLE_UPDATED`, `TABLE_REMOVED` pub/sub
+    - **Personal notification channel** — friend request and invite delivery via `player:{id}:notify`
+
+    The `serverHelper.js` test helper spins up a real Express + WebSocket server on a random port for each test, keeping tests fully isolated.
+  </Card>
+
+  <Card title="Anti-Cheat Tests" icon="shield">
+    **Location:** `test/unit/anticheat/`
+
+    Server-side move validation logic tests. Covers:
+
+    - **Turn enforcement** — verifying it is the correct player's turn before accepting a bid or card play
+    - **Card legality** — following-suit rules, spades-breaking rules, Blind Nil eligibility
+    - **Hand membership** — confirming the played card is actually in the player's hand
+
+    These tests run as part of the unit suite and require no external services.
+  </Card>
+</CardGroup>
+
+## Linting
+
+ESLint runs against the integration test directory:
+
+```bash
+npm run lint
+```
+
+This executes `eslint test/integration` and checks the integration test files for style and correctness issues. Linting runs in CI **before** the test suite — a lint failure blocks the test run.
+
+<Tip>
+  Run `npm run lint` locally before pushing to catch integration test style issues before CI picks them up.
+</Tip>
+
+## CI Pipeline
+
+The CI workflow runs on every push to `qa` and `main`, and on every pull request targeting `dev`, `qa`, or `main`.
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [qa, main]
+  pull_request:
+    branches: [dev, qa, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+        timeout-minutes: 5
+        env:
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+```
+
+**Key points about the CI environment:**
+
+- **Redis is always available** — the workflow spins up a `redis:7-alpine` service container with a health check, so all WebSocket and Redis-dependent tests run in CI
+- **`DATABASE_URL` is not set** — integration tests that require PostgreSQL are skipped in CI by default; they are intended to be run in a separate environment with a real database
+- **Lint runs first** — the `Lint` step runs `npm run lint` against `test/integration/` before the test suite; any ESLint error fails the build immediately
+- **Test timeout** — the full test run has a 5-minute timeout to prevent hung tests from blocking the pipeline
+- **Node.js 24** — CI uses Node.js 24 via `actions/setup-node@v4` with npm dependency caching
+
+## DEV_AUTO_VERIFY
+
+When developing locally without an SMTP server, email verification creates a bottleneck — you can only fully register one account through the normal email flow. Set `DEV_AUTO_VERIFY=true` to bypass this:
+
+```bash
+DEV_AUTO_VERIFY=true npm start
+```
+
+With this flag enabled, `POST /api/auth/register` marks new accounts as verified immediately — no verification email is sent, no token is required, and you can log in right after registering. The flag is read at request time, so you can toggle it without restarting the server.
+
+<Warning>
+  Never set `DEV_AUTO_VERIFY=true` in production. It completely disables email verification, allowing any registration to skip the email confirmation step. This is a local development convenience only.
+</Warning>
+
+## Bot Players for Testing
+
+When testing gameplay locally, you often need all four seats filled to start a game. The table host can add bot players to any empty seat:
+
+```http
+POST /api/tables/:tableId/add-bot
+Headers: x-session-id, x-player-id
+Body: { "seat": "north" }
+```
+
+Valid seat values: `north`, `east`, `south`, `west`.
+
+Bot player IDs follow the pattern `bot:<seat>` — for example, `bot:north`, `bot:east`. A table can have any mix of human and bot seats. Once all four seats are filled, the game starts automatically.
+
+**Bot behaviour is intentionally minimal:**
+
+- **Bid:** counts the number of spades in its hand and bids that number
+- **Play:** picks a random card from the set of legal plays at each turn
+
+After each human action (bid or card play), the server immediately processes all consecutive bot turns until it is a human player's turn again. From the client's perspective, you just poll `GET /api/tables/:tableId/state` as normal.
+
+<Note>
+  If a human player leaves a table mid-game, their seat is automatically filled by a bot so the game can continue. Bot players are a testing convenience — they are not the production AI opponent planned for a future release.
+</Note>

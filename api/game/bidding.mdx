@@ -1,0 +1,150 @@
+---
+title: "Bidding Phase API: Bid, Reveal Hand, and Blind Nil Exchange"
+sidebarTitle: "Bidding"
+description: "Place bids (0–13, Nil, or Blind Nil), reveal your hand before bidding, and execute the two-step Blind Nil card exchange via the Spades Online API."
+---
+
+The bidding phase runs clockwise starting from the player immediately left of the dealer. Each player bids independently — bids are not revealed to partners or opponents until all four seats have bid. Bot turns are automatically processed server-side immediately after each human action; you never need to poll while consecutive bot bidders take their turns. The response to your bid already reflects the state after all bot bids have been applied.
+
+---
+
+## POST /api/tables/:tableId/bid
+
+Place a bid during the bidding phase. Valid bid values are `0` (Nil), `-1` (Blind Nil — only if eligible), or an integer from `1` to `13`.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+### Body
+
+<ParamField body="bid" type="integer" required>
+  The bid to place.
+  - `0` — Nil (player commits to taking zero tricks; worth ±50 points)
+  - `-1` — Blind Nil (player bids before seeing their hand; worth ±100 points; only allowed when your team is at least 100 points behind)
+  - `1`–`13` — Regular bid for that number of tricks
+</ParamField>
+
+### Bot turns
+
+After the player's bid is recorded, the server immediately resolves all consecutive bot turns in the bidding order. The response body reflects the game state **after all bot bids** have been applied. There is no need to poll while bots act.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3000/api/tables/<tableId>/bid \
+  -H 'Content-Type: application/json' \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>' \
+  -d '{"bid": 3}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|--------|---------|
+| `200`  | Bid accepted. Body: updated player view (see [Game State](/api/game/state)). Bot turns auto-advanced before response. |
+| `400`  | Invalid bid value, or player attempted Blind Nil without meeting the 100-point eligibility requirement. |
+| `401`  | Missing or invalid session. |
+| `403`  | Player is not seated at this table. |
+| `404`  | Table not found. |
+| `409`  | It is not this player's turn to bid, or the game is not in the bidding phase. |
+
+---
+
+## POST /api/tables/:tableId/reveal-hand
+
+Reveals the player's hand so they can inspect their cards before deciding whether to bid Blind Nil. This endpoint is only meaningful for players who are eligible for Blind Nil (their team is at least 100 points behind). Calling `reveal-hand` **forfeits Blind Nil eligibility** — after revealing, the player must place a regular bid (0–13) instead.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+No request body is required.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3000/api/tables/<tableId>/reveal-hand \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>'
+```
+
+### Response codes
+
+| Status | Meaning |
+|--------|---------|
+| `200`  | Hand revealed. Body: updated player view with `myHand` now populated and `blindNilEligible: false`. |
+| `400`  | Player is not eligible to use reveal-hand (team is not 100+ points behind). |
+| `401`  | Missing or invalid session. |
+| `403`  | Player is not seated at this table. |
+| `404`  | Table not found. |
+| `409`  | Bid already placed, or game is not in the bidding phase. |
+
+---
+
+## POST /api/tables/:tableId/blind-nil-exchange
+
+Submits cards for the two-step Blind Nil card exchange. After all four players have bid and at least one bid is Blind Nil, the game transitions to the `blind_nil_exchange` phase before play begins. The exchange proceeds in two steps:
+
+1. **Step 1 (`blind_to_partner`):** The Blind Nil player sends 2 cards from their hand to their partner.
+2. **Step 2 (`partner_to_blind`):** The partner sends 2 different cards from their own hand back to the Blind Nil player.
+
+Both steps are submitted to this same endpoint. The server tracks which step is current via `blindNilExchange.step` in the game state.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+### Body
+
+<ParamField body="cards" type="array" required>
+  An array of exactly **2 card strings** to transfer. Cards must exist in the submitting player's current hand. Card format: rank + suit initial (e.g. `"AS"` for Ace of Spades, `"TD"` for 10 of Diamonds). See [Hand representation](/api/game/state#hand-representation) for the full encoding reference.
+</ParamField>
+
+### Bot partner
+
+If the partner seat is occupied by a bot, the server automatically processes the partner's exchange step (Step 2) immediately after the human Blind Nil player completes Step 1. The response reflects the state after the bot partner has responded.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3000/api/tables/<tableId>/blind-nil-exchange \
+  -H 'Content-Type: application/json' \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>' \
+  -d '{"cards": ["AS", "2S"]}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|--------|---------|
+| `200`  | Exchange step accepted. Body: updated player view. If the partner is a bot, Step 2 is auto-processed before the response. |
+| `400`  | Wrong number of cards (must be exactly 2), one or more cards are not in the player's hand, or invalid card format. |
+| `401`  | Missing or invalid session. |
+| `403`  | Player is not seated at this table. |
+| `404`  | Table not found. |
+| `409`  | It is not this player's step in the exchange, or the game is not in the `blind_nil_exchange` phase. |
+
+---
+
+## Bidding flow
+
+The following steps describe the full bidding sequence for a 4-player game from deal through the start of play.
+
+<Steps>
+  <Step title="Hand is dealt">
+    The server deals 13 cards to each seat and sets `phase: "bidding"`. The first bidder is the player immediately left of the dealer (clockwise). On hand 1, North deals, so East bids first.
+  </Step>
+
+  <Step title="Blind Nil check">
+    Before bidding, any player whose team is at least 100 points behind receives `blindNilEligible: true` in their state view and does **not** receive `myHand`. They must either call `POST /reveal-hand` (to see their hand and forfeit Blind Nil) or bid `-1` (Blind Nil) without looking.
+  </Step>
+
+  <Step title="Players bid in turn">
+    Each player calls `POST /bid` with their chosen value when `currentBidderSeat` matches their seat. The server advances `currentBidderSeat` clockwise after each valid bid. Bot seats are resolved automatically — the next human player's response already reflects all intervening bot bids.
+  </Step>
+
+  <Step title="Blind Nil exchange (if applicable)">
+    If any player bid Blind Nil (`-1`), the game moves to `phase: "blind_nil_exchange"`. The Blind Nil player calls `POST /blind-nil-exchange` with 2 cards to send to their partner (Step 1). Their partner then calls the same endpoint with 2 cards to return (Step 2). If the partner is a bot, Step 2 is auto-processed. If both partners bid Blind Nil, each pair completes their exchange sequentially.
+  </Step>
+
+  <Step title="Play phase begins">
+    Once all bids are placed (and any Blind Nil exchanges are complete), the server sets `phase: "playing"` and `currentPlayerSeat` to the player left of the dealer. The first trick begins.
+  </Step>
+</Steps>

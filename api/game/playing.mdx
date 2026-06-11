@@ -1,0 +1,121 @@
+---
+title: "Play Cards During a Spades Game via the REST API"
+sidebarTitle: "Playing"
+description: "POST /api/tables/:tableId/play submits a card play. The server validates legality, advances bot turns, and returns the updated game state including the next valid plays."
+---
+
+During the playing phase, each player takes turns playing one card per trick in clockwise seat order. The server validates every card play server-side via the anti-cheat validator in `server/anticheat/validate.js` before mutating any game state — there is no way for a client to submit an illegal move and have it accepted. After each human card play, the server automatically resolves all consecutive bot turns, so the response you receive already reflects the state after bots have acted.
+
+---
+
+## Card format
+
+<Note>
+  Cards are encoded as a **rank + suit initial** two-character string. Ranks are `2`–`9`, `T` (10), `J` (Jack), `Q` (Queen), `K` (King), and `A` (Ace). Suits are `S` (Spades), `H` (Hearts), `D` (Diamonds), and `C` (Clubs).
+
+  **Examples:** `AS` = Ace of Spades, `KH` = King of Hearts, `TD` = 10 of Diamonds, `2C` = 2 of Clubs.
+</Note>
+
+---
+
+## POST /api/tables/:tableId/play
+
+Submit a card play for the requesting player's turn.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+### Body
+
+<ParamField body="card" type="string" required>
+  The card to play, encoded as rank + suit initial — e.g. `"AS"` for Ace of Spades or `"TD"` for 10 of Diamonds. The card must be in the player's current hand and must be a legal play under the current game rules (see [Legal play rules](#legal-play-rules) below).
+</ParamField>
+
+### Server-side validation
+
+Before any state mutation the server checks (in order):
+
+1. The game must be in the `playing` phase.
+2. It must be the requesting player's turn (`currentPlayerSeat`).
+3. The card must exist in the player's hand.
+4. The card must be a legal play under current game rules (follow-suit obligation, Spades-breaking rules, and first-trick restrictions are all enforced).
+
+A `400` is returned immediately if any check fails.
+
+### Bot turns
+
+After the player's card is accepted, the server resolves all consecutive bot turns before returning the response. The response body therefore reflects the game state after all bot plays have been applied — you do not need to poll while bots act.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3000/api/tables/<tableId>/play \
+  -H 'Content-Type: application/json' \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>' \
+  -d '{"card": "AS"}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|--------|---------|
+| `200`  | Card accepted. Body: updated player view (see [Game State](/api/game/state)). All bot turns auto-advanced before response. |
+| `400`  | Card is not in the player's hand, or the play is illegal (e.g. must follow suit, Spades not yet broken, first-trick Spade restriction). |
+| `401`  | Missing or invalid session. |
+| `403`  | Player is not seated at this table. |
+| `404`  | Table not found. |
+| `409`  | It is not this player's turn to play, or the game is not in the `playing` phase. |
+
+---
+
+## Legal play rules
+
+<Accordion title="Play legality rules">
+  The following rules govern which cards may be played on any given turn. These are enforced identically by the `getLegalPlays` function (used to compute `validCards` in the state response) and by `isCardLegal` (called during `validateCardPlay` before every state mutation).
+
+  **Follow-suit obligation**
+  If the player's hand contains any cards matching the suit led in the current trick, the player **must** play one of those cards. They may not play a card of a different suit when they can follow suit.
+
+  **Spades cannot be led until broken**
+  A player may not lead a Spade to open a trick until Spades have been broken (i.e. a Spade has been played while a player could not follow suit on a previous, non-first trick). **Exception:** if the player's entire hand consists only of Spades, they may lead a Spade regardless of whether Spades are broken.
+
+  **First-trick Spade restriction**
+  On the very first trick of a hand, a player may not play a Spade even when they cannot follow suit — as long as they hold at least one non-Spade card. If the player's hand is entirely Spades, they may play a Spade.
+
+  **validCards shows all legal options**
+  The `validCards` array in the [Game State](/api/game/state) response lists every card the current player is permitted to play. Clients may use this to highlight legal cards in the UI. The server re-validates independently — submitting a card not in `validCards` returns `400`.
+</Accordion>
+
+---
+
+## Anti-cheat
+
+<Note>
+  `server/anticheat/validate.js` runs two validators before any state mutation: `validateBidTurn` (for bids) and `validateCardPlay` (for card plays). `validateCardPlay` confirms the game is in the `playing` phase, that it is the correct player's turn, that the card is in the player's hand, and that the card is legal under `isCardLegal`. Any violation throws a structured error with a machine-readable `code` (`INVALID_ACTION`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, or `ILLEGAL_PLAY`) which the route handler maps to a `400` response. State is never mutated on a failed validation.
+</Note>
+
+---
+
+## Trick resolution
+
+After the 4th card is played to a trick the server resolves the winner immediately:
+
+- **Highest Spade wins** if any Spades were played in the trick.
+- **Highest card of the led suit wins** if no Spades were played.
+- Cards of other non-led suits never win regardless of rank.
+
+The winning seat's `tricksWon` count is incremented, the trick is appended to `completedTricks`, and the winner becomes `currentPlayerSeat` (they lead the next trick). If Spades were not yet broken and a Spade was played while a player could not follow suit on a non-first trick, `spadesbroken` is set to `true`.
+
+---
+
+## End of hand
+
+After all 13 tricks have been played the server automatically runs end-of-hand scoring with no additional client action required:
+
+1. **`scoreHand`** — computes `scoreDelta` and `newBags` for each team based on bids, actual tricks won, and Nil/Blind Nil outcomes.
+2. **`applyBagPenalties`** — accumulates bags; every 10 accumulated bags deducts 100 points from that team's score and resets the bag count for that group of 10.
+3. **`checkWinLoss`** — evaluates win and loss conditions:
+   - A team reaching **250 or more** points wins; if both teams cross 250 in the same hand the higher score wins (exact tie plays another hand).
+   - A team falling to **−250 or below** loses immediately by the same tie-break rules.
+
+If a win/loss condition is met the game moves to `phase: "game_over"` with `gameOver: true` and `winner` set to the winning team (`"ns"` or `"ew"`). Otherwise the dealer rotates clockwise, a new hand is dealt, and the game returns to `phase: "bidding"` automatically.

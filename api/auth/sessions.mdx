@@ -1,0 +1,106 @@
+---
+title: "Session Management and Authentication Headers"
+sidebarTitle: "Sessions"
+description: "How Spades Online sessions work: Redis-backed tokens, the x-session-id and x-player-id header protocol, and session lifecycle from login to logout."
+---
+
+Sessions in Spades Online are stored in Redis as UUID tokens with a 7-day TTL. Every API request that requires authentication must include both the `x-session-id` and `x-player-id` headers. The server looks up the session by token, verifies that the stored `playerId` matches the `x-player-id` header, and rejects the request with `401` if either header is missing or the session has expired or been deleted.
+
+---
+
+## Session lifecycle
+
+<Steps>
+  <Step title="Register">
+    Call `POST /api/auth/register` with email, username, and password. The account is created in PostgreSQL but remains inactive until the email is verified.
+  </Step>
+  <Step title="Verify email">
+    Click the verification link sent to the registered email address. The link calls `GET /api/auth/verify-email?token=<uuid>`, which marks the account as active in the database and deletes the single-use token.
+  </Step>
+  <Step title="Login">
+    Call `POST /api/auth/login` with email and password. On success, the server creates a session in Redis and returns a `sessionId`, `playerId`, and `username`.
+  </Step>
+  <Step title="Include headers on every authenticated request">
+    Pass both `x-session-id` and `x-player-id` as headers on every request to an authenticated endpoint. The server validates the pair on each request.
+  </Step>
+  <Step title="Logout">
+    Call `POST /api/auth/logout` with the `x-session-id` header. The server deletes the session key from Redis immediately. Any subsequent request using the old token is rejected with `401`.
+  </Step>
+</Steps>
+
+---
+
+## Required headers
+
+Every authenticated endpoint requires both of the following headers. Omitting either one, or supplying a value that does not match the session stored in Redis, results in a `401` response.
+
+| Header | Value | Notes |
+|---|---|---|
+| `x-session-id` | Session token UUID returned by `POST /api/auth/login` | The server looks up `session:{sessionId}` in Redis to validate the token. |
+| `x-player-id` | Player UUID returned by `POST /api/auth/login` | Must match the `playerId` stored inside the Redis session record. |
+
+### Example
+
+```bash
+curl http://localhost:3000/api/friends \
+  -H 'x-session-id: f47ac10b-58cc-4372-a567-0e02b2c3d479' \
+  -H 'x-player-id: a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+```
+
+---
+
+## Session storage
+
+The web client stores session data in the browser's `sessionStorage` immediately after a successful login under the following keys:
+
+| Key | Value |
+|---|---|
+| `sessionId` | The UUID session token from the login response. |
+| `playerId` | The UUID player identifier from the login response. |
+| `username` | The player's display name from the login response. |
+
+On page reload, these values are read back from `sessionStorage` so the player remains authenticated without logging in again. Clearing `sessionStorage` (e.g. closing the browser tab) effectively logs the player out on the client side, though the server-side session continues to exist in Redis until it expires or `POST /api/auth/logout` is called.
+
+---
+
+## Session invalidation
+
+Sessions are invalidated in two ways:
+
+- **Explicit logout** — calling `POST /api/auth/logout` with the `x-session-id` header deletes the Redis key immediately. The token becomes invalid for all subsequent requests.
+- **Natural expiry** — sessions are stored in Redis with a **7-day TTL**. If the player does not log out manually, the session expires automatically after 7 days of inactivity.
+
+---
+
+## Error responses
+
+A missing, malformed, or expired session always returns `HTTP 401` with a JSON error body. The following scenarios all produce a `401`:
+
+| Scenario | Error message |
+|---|---|
+| `x-session-id` or `x-player-id` header is absent | `"missing auth headers"` |
+| The session token is not found in Redis (expired or never existed) | `"invalid or expired session"` |
+| The `x-player-id` header does not match the `playerId` stored in the session | `"session player mismatch"` |
+
+### Example 401 response body
+
+```json
+{
+  "error": "invalid or expired session"
+}
+```
+
+---
+
+## WebSocket auth
+
+<Note>
+  WebSocket connections also require the session token for authentication. Unlike HTTP requests, the token is passed in the **upgrade request header** rather than a query parameter:
+
+  ```
+  GET ws://localhost:3000/
+  x-session-id: f47ac10b-58cc-4372-a567-0e02b2c3d479
+  ```
+
+  If the header is missing or the session is invalid, the server responds with `HTTP 401` and closes the socket. No anonymous WebSocket connections are accepted. See the WebSocket documentation for full connection and event details.
+</Note>

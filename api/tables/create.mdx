@@ -1,0 +1,128 @@
+---
+title: "Create a New Table in Spades Online"
+sidebarTitle: "Create Table"
+description: "POST /api/tables creates a new game table. Configure visibility (public/friends-only/private), join policy, and spectating. Returns the tableId on success."
+---
+
+Any authenticated player can create a table. The creating player immediately becomes the host and is automatically seated in the **north** seat. The other three seats (`east`, `south`, `west`) start empty and can be filled by other players, bots, or a mix of both. A game begins automatically once all four seats are occupied.
+
+---
+
+## POST /api/tables
+
+**Required headers**
+
+| Header | Description |
+|---|---|
+| `x-session-id` | Session token from login |
+| `x-player-id` | Authenticated player's UUID |
+
+**Request body**
+
+All fields are optional. When omitted, sensible defaults are applied (see each field below).
+
+<ParamField body="name" type="string">
+  Display name for the table. Maximum 50 characters. Leading and trailing whitespace is trimmed. If omitted or empty, a default name is used and the field is stored as `null`.
+</ParamField>
+
+<ParamField body="visibility" type="string">
+  Controls who can discover this table. Must be one of `"public"`, `"friends-only"`, or `"private"`. Defaults to `"public"`.
+
+  - **`public`** — listed in the lobby browser and visible to all players.
+  - **`friends-only`** — visible only in the friends list of the host's friends; not listed in the public lobby.
+  - **`private`** — completely unlisted; accessible only via a direct join link or in-app invite.
+</ParamField>
+
+<ParamField body="joinPolicy" type="string">
+  Controls who is allowed to sit at the table. Must be one of `"open"`, `"friends-only"`, or `"invite-only"`. Must be compatible with the chosen `visibility` (see the compatibility table below). If omitted, defaults to the most permissive policy allowed by the visibility. An incompatible value is rejected with `400`.
+</ParamField>
+
+<ParamField body="spectating" type="boolean">
+  Whether spectators may observe the game. Defaults to `true`. Must be a JSON boolean (`true` or `false`), not a string.
+</ParamField>
+
+### Visibility / join policy compatibility
+
+The `joinPolicy` must be compatible with the selected `visibility`. Sending an incompatible combination returns `400`.
+
+| Visibility | Allowed join policies | Default join policy |
+|---|---|---|
+| `public` | `open`, `friends-only`, `invite-only` | `open` |
+| `friends-only` | `friends-only`, `invite-only` | `friends-only` |
+| `private` | `invite-only` | `invite-only` |
+
+### Visibility explained
+
+<Tabs>
+  <Tab title="public">
+    The table appears in the lobby browser (`GET /api/lobby/tables`) and is discoverable by any authenticated player. When a public table is created or updated, a `TABLE_CREATED` / `TABLE_UPDATED` WebSocket event is broadcast on the shared lobby channel, so all connected clients see it in real time.
+  </Tab>
+  <Tab title="friends-only">
+    The table does **not** appear in the public lobby. Instead, a `TABLE_CREATED` event is sent directly to the personal notification channel of each of the host's friends when the table is created (or when visibility is changed to `friends-only`). Friends see it in their friends list. Players who are not friends with the host cannot find or join the table unless they receive a direct join link or in-app invite.
+  </Tab>
+  <Tab title="private">
+    The table produces **no** lobby or friend-list notifications. It is completely unlisted. Only players who receive an explicit join link (`GET /api/tables/:tableId/join-link`) or an in-app invite (`POST /api/tables/:tableId/invite`) from the host can access it.
+  </Tab>
+</Tabs>
+
+**Example request**
+
+```bash
+curl -X POST http://localhost:3000/api/tables \
+  -H 'Content-Type: application/json' \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>' \
+  -d '{"name": "Alice Table", "visibility": "public", "joinPolicy": "open", "spectating": true}'
+```
+
+**Responses**
+
+<ResponseField name="201" type="object">
+  Table created successfully. The host is already seated at `north`.
+
+  <Expandable title="Response fields">
+    <ResponseField name="tableId" type="string">
+      UUID of the newly created table.
+    </ResponseField>
+
+    <ResponseField name="name" type="string | null">
+      Stored table name, or `null` if none was provided.
+    </ResponseField>
+
+    <ResponseField name="visibility" type="string">
+      The resolved visibility: `"public"`, `"friends-only"`, or `"private"`.
+    </ResponseField>
+
+    <ResponseField name="joinPolicy" type="string">
+      The resolved join policy: `"open"`, `"friends-only"`, or `"invite-only"`.
+    </ResponseField>
+
+    <ResponseField name="spectating" type="boolean">
+      Whether spectators are allowed.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="400" type="object">
+  Invalid request. Possible causes: `name` exceeds 50 characters, `visibility` is not a recognised value, `joinPolicy` is not a recognised value or is incompatible with the chosen `visibility`, or `spectating` is not a boolean. Body: `{ "error": "..." }`.
+</ResponseField>
+
+<ResponseField name="401" type="object">
+  Missing or invalid session. Body: `{ "error": "..." }`.
+</ResponseField>
+
+**Example response**
+
+```json
+{
+  "tableId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "Alice Table",
+  "visibility": "public",
+  "joinPolicy": "open",
+  "spectating": true
+}
+```
+
+<Note>
+  Tables are stored in Redis with a one-hour inactivity TTL. Any activity on the table (a player sitting, a card played, etc.) resets the TTL. An idle table that receives no activity for one hour is automatically expired and removed from the lobby index.
+</Note>

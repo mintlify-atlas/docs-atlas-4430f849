@@ -1,0 +1,279 @@
+---
+title: "Join, Sit, and Invite Players to a Spades Table"
+sidebarTitle: "Join Table"
+description: "How to sit at a table, use join links and spectator links, send in-app invites, and arrive as an observer. Covers POST /api/tables/:tableId/sit, join-link, and spectator-link endpoints."
+---
+
+Players can join a table in four ways: **sitting** directly (subject to the table's join policy), **using a join link** that the host has generated (bypasses join policy), **using a spectator link** (observer-only access), or **accepting an in-app invite** sent by the host. Observers can also arrive at a table without a link if spectating is enabled. The game starts automatically the moment all four seats (`north`, `east`, `south`, `west`) are filled.
+
+All endpoints require `x-session-id` and `x-player-id` headers.
+
+---
+
+## POST /api/tables/:tableId/sit
+
+Sit at an empty seat at the specified table. The table's join policy is enforced unless the player arrived via a join link or was invited.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**Request body**
+
+```json
+{ "seat": "north" }
+```
+
+Valid seat values: `north`, `east`, `south`, `west`.
+
+**Join policy enforcement**
+
+| Policy | Who may sit |
+|---|---|
+| `open` | Any authenticated player |
+| `friends-only` | Must be a friend of the host |
+| `invite-only` | Must hold a prior invite (via join link or in-app invite) |
+
+The host always passes policy checks regardless of the configured policy.
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Seated. Body: `{ tableId, seat }`. If all 4 seats are now filled, the game starts automatically. |
+| `400` | Invalid seat value |
+| `401` | Missing or invalid session |
+| `403` | Player is a spectator-only observer and cannot sit, or the join policy forbids seating |
+| `404` | Table not found |
+| `409` | Game already in progress, seat is taken, player is already seated, or concurrent modification — retry |
+
+---
+
+## POST /api/tables/:tableId/arrive
+
+Arrive at a table as an observer without a link. The table must have spectating enabled. If the player is already seated or already an observer, the call is idempotent and succeeds.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**No request body required.**
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Arrived as observer. Body: `{ tableId }` |
+| `401` | Missing or invalid session |
+| `403` | Spectating is disabled for this table |
+| `404` | Table not found |
+| `409` | Observer slots are full (max 20), or concurrent modification — retry |
+
+---
+
+## Join Links
+
+Join links allow the host to share a single-use URL that grants any authenticated player the ability to sit at the table, bypassing the table's join policy. This is the primary way to invite players to `invite-only` tables via an external channel (e.g. chat).
+
+### GET /api/tables/:tableId/join-link
+
+Host-only. Generates a single-use join link token. The token is stored in Redis and expires after one hour of table inactivity.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ token, joinUrl }`. `joinUrl` is a full URL (e.g. `https://spades.online/join/<token>`). |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+
+**Example response**
+
+```json
+{
+  "token": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "joinUrl": "https://spades.online/join/f47ac10b-58cc-4372-a567-0e02b2c3d479"
+}
+```
+
+### POST /api/tables/join-link/:token
+
+Consumes a join link token and seats the player at the associated table. The token is **deleted on use** so it cannot be reused. The table's `joinPolicy` is intentionally bypassed — the link itself serves as host authorisation.
+
+**Path parameter:** `token` — join link token from `GET /api/tables/:tableId/join-link` or an in-app invite.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**Request body**
+
+```json
+{ "seat": "north" }
+```
+
+Valid seat values: `north`, `east`, `south`, `west`.
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Seated. Body: `{ tableId, seat }`. Game starts automatically if all 4 seats are now filled. |
+| `400` | Invalid seat value |
+| `401` | Missing or invalid session |
+| `403` | Malformed join link (token is not a valid UUID format) |
+| `404` | Table no longer exists |
+| `409` | Game already in progress, seat is taken, or player is already seated |
+| `410` | `JOIN_LINK_GONE` — token has expired or was already used |
+
+<Warning>
+  Join link tokens are single-use. Once consumed (whether successfully or after the table expires), the token returns `410 JOIN_LINK_GONE`. Generate a new link for each player you want to invite.
+</Warning>
+
+---
+
+## Spectator Links
+
+Spectator links allow the host to share a reusable URL that grants any authenticated player observer-only access. Unlike join links, spectator links are **multi-use** — they are not consumed after use. Players who join via a spectator link are marked as spectator-only and **cannot sit down** even if the join policy would otherwise allow it.
+
+### POST /api/tables/:tableId/spectator-link
+
+Host-only. Generates a shareable spectator link. Spectating must be enabled on the table. The token is stored in Redis and expires with the table's TTL (one hour of inactivity).
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ token, spectatorUrl }`. `spectatorUrl` is a full URL (e.g. `https://spades.online/spectate/<token>`). |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host, or spectating is disabled for this table |
+| `404` | Table not found |
+
+**Example response**
+
+```json
+{
+  "token": "c2d3e4f5-a6b7-8901-cdef-234567890abc",
+  "spectatorUrl": "https://spades.online/spectate/c2d3e4f5-a6b7-8901-cdef-234567890abc"
+}
+```
+
+### POST /api/tables/spectator-link/:token
+
+Validates a spectator link token and adds the authenticated player to the table as an observer. The player is permanently marked as spectator-only for this table session — they cannot sit down even if a seat is free.
+
+**Path parameter:** `token` — spectator link token.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**No request body required.**
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Joined as observer. Body: `{ tableId }` |
+| `401` | Missing or invalid session |
+| `403` | Invalid or expired spectator link, or spectating has since been disabled on the table |
+| `404` | Table no longer exists |
+| `409` | Observer slots are full (max 20) |
+
+---
+
+## In-App Invites
+
+The host can send an in-app invite directly to any registered player. The invited player receives a real-time `INVITE_RECEIVED` WebSocket notification on their personal channel containing a single-use join-link token they can use to sit at the table. Invites expire after **10 minutes**.
+
+### POST /api/tables/:tableId/invite
+
+Host-only. Sends an in-app invite to the target player.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Request body**
+
+```json
+{ "playerId": "<target-player-uuid>" }
+```
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Invite sent. Body: `{ inviteId, token, expiresAt }`. `INVITE_RECEIVED` is published to the target player's notification channel. |
+| `400` | Missing or invalid `playerId` in request body |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found, or target player does not exist |
+| `409` | `DUPLICATE_INVITE` — an active invite already exists for this `(tableId, playerId)` pair; wait for it to expire or be declined before sending another |
+
+**Example response**
+
+```json
+{
+  "inviteId": "d4e5f6a7-b8c9-0123-def0-456789abcdef",
+  "token": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "expiresAt": "2026-01-01T12:10:00.000Z"
+}
+```
+
+The `token` in the response is a single-use join link the invited player can use with `POST /api/tables/join-link/:token`. The `INVITE_RECEIVED` event sent to the target player's notification channel contains the same `token`, along with the `inviteId`, `tableId`, `tableName`, and `invitedBy` info.
+
+### POST /api/invites/:inviteId/decline
+
+Invitee-only. Declines a pending invite. All associated Redis keys (the invite record, the duplicate-check key, the join-link token, and the invited-list entry) are deleted. A `INVITE_DECLINED` event is published to the host's notification channel so their UI can update.
+
+**Path parameter:** `inviteId` — UUID from the `inviteId` field in `INVITE_RECEIVED` or the invite response.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the invitee)
+
+**No request body required.**
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Invite declined. Body: `{ inviteId }`. `INVITE_DECLINED` is published to the host's notification channel. |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the invitee on this invite |
+| `410` | `INVITE_GONE` — invite has expired or was already consumed / declined |
+
+---
+
+## POST /api/tables/:tableId/leave
+
+Removes the authenticated player from the table. Behaviour differs depending on whether a game is in progress.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**No request body required.**
+
+**Behaviour**
+
+- **Waiting table:** The player's seat is vacated. If no human players remain after the departure, the table is terminated.
+- **In-progress game:** A bot is automatically placed in the vacated seat so the game can continue uninterrupted. If no human players remain (all seats are now bots), the table is terminated.
+- **Observer:** The player is removed from the observer list with no effect on seats or game state.
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Left table. Body: `{ message }` |
+| `401` | Missing or invalid session |
+| `404` | Table not found |
+| `409` | Player is not seated at or observing this table |
+
+<Note>
+  If you leave during an active game, a bot immediately takes your seat. The bot bids the number of spades in its hand and plays a random legal card — it is a testing convenience and not a production-quality AI.
+</Note>

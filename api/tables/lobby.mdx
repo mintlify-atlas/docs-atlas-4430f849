@@ -1,0 +1,169 @@
+---
+title: "Browse and List Tables in the Spades Online Lobby"
+sidebarTitle: "Lobby"
+description: "GET /api/tables and GET /api/lobby/tables return open tables. GET /api/player/table returns the authenticated player's current table."
+---
+
+The lobby exposes two list endpoints and one player-table lookup. `GET /api/tables` returns all waiting public tables with no filtering. `GET /api/lobby/tables` targets the in-app lobby browser and supports optional query filters for seat availability and name search. Both list endpoints return the same response shape — an array of enriched table objects under the `tables` key. `GET /api/player/table` is a lightweight lookup that tells the caller which table (if any) they are currently seated at or observing.
+
+All three endpoints require a valid session. Pass `x-session-id` and `x-player-id` in every request header.
+
+---
+
+## GET /api/tables
+
+Returns all public tables whose status is `waiting` (game not yet started). No query parameters are accepted — use `GET /api/lobby/tables` for filtered browsing.
+
+**Required headers**
+
+| Header | Description |
+|---|---|
+| `x-session-id` | Session token from login |
+| `x-player-id` | Authenticated player's UUID |
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  Success. Returns the full table list.
+
+  <Expandable title="Response body">
+    <ResponseField name="tables" type="array">
+      Array of table objects. Each entry contains:
+
+      <ResponseField name="tableId" type="string">
+        UUID of the table.
+      </ResponseField>
+
+      <ResponseField name="name" type="string | null">
+        Display name of the table, or `null` if the host did not set one.
+      </ResponseField>
+
+      <ResponseField name="hostPlayerId" type="string">
+        UUID of the player who created the table.
+      </ResponseField>
+
+      <ResponseField name="hostUsername" type="string | null">
+        Display username of the host, or `null` if unavailable.
+      </ResponseField>
+
+      <ResponseField name="seats" type="object">
+        Object keyed by seat name (`north`, `east`, `south`, `west`). Each value is either `null` (empty seat) or an object `{ playerId, username, isBot }` describing the seated player.
+      </ResponseField>
+
+      <ResponseField name="seatsAvailable" type="number">
+        Count of empty seats (0–4).
+      </ResponseField>
+
+      <ResponseField name="observerCount" type="number">
+        Number of spectators currently watching the table.
+      </ResponseField>
+
+      <ResponseField name="joinPolicy" type="string">
+        How new players may join: `"open"`, `"friends-only"`, or `"invite-only"`.
+      </ResponseField>
+
+      <ResponseField name="visibility" type="string">
+        Always `"public"` on this endpoint.
+      </ResponseField>
+
+      <ResponseField name="ruleset" type="string">
+        Ruleset in use. Defaults to `"Standard"`.
+      </ResponseField>
+
+      <ResponseField name="spectating" type="boolean">
+        Whether the host has enabled spectator access.
+      </ResponseField>
+
+      <ResponseField name="canJoin" type="boolean">
+        Convenience flag. `true` when seats are available and the join policy allows the requesting player to sit (open tables with seats; friends-only tables where the requester is a friend of the host). Always `false` for `invite-only` tables.
+      </ResponseField>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="401" type="object">
+  Missing or invalid session. Body: `{ "error": "..." }`.
+</ResponseField>
+
+---
+
+## GET /api/lobby/tables
+
+The public lobby browser. Only returns tables with `visibility: "public"`. Supports optional query parameters to filter the result set; filters compose — both can be used at the same time.
+
+**Required headers**
+
+| Header | Description |
+|---|---|
+| `x-session-id` | Session token from login |
+| `x-player-id` | Authenticated player's UUID |
+
+**Query parameters**
+
+<ParamField query="hasSeats" type="boolean string">
+  When set to `"true"`, only tables with at least one open seat are returned. Omit or pass any other value to include full tables.
+</ParamField>
+
+<ParamField query="search" type="string">
+  Case-insensitive substring match against the table name. Tables with `name: null` are excluded when a non-empty search term is provided.
+</ParamField>
+
+**Response shape**
+
+Identical to `GET /api/tables` — `{ tables: [...] }` with the same per-table fields. The `canJoin` field is computed relative to the authenticated player's friendship with each host.
+
+**Example — filter by seat availability and name**
+
+```bash
+curl 'http://localhost:3000/api/lobby/tables?hasSeats=true&search=alice' \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>'
+```
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ tables: [...] }` — filtered list of public waiting tables |
+| `401` | Missing or invalid session |
+
+<Note>
+  `GET /api/lobby/tables` computes `canJoin` relative to the authenticated player: for `friends-only` join-policy tables, the flag is `true` only when the requester is a friend of the host **and** a seat is available. `GET /api/tables` does not have access to the requester identity and always sets `canJoin: false` for friends-only tables.
+</Note>
+
+---
+
+## GET /api/player/table
+
+Returns the `tableId` of the table the authenticated player is currently seated at or observing. Returns `null` if the player is not at any table. Tables whose game phase is `game_over` are excluded.
+
+**Required headers**
+
+| Header | Description |
+|---|---|
+| `x-session-id` | Session token from login |
+| `x-player-id` | Authenticated player's UUID |
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  <ResponseField name="tableId" type="string | null">
+    UUID of the player's current table, or `null` if they are not at one.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="401" type="object">
+  Missing or invalid session. Body: `{ "error": "..." }`.
+</ResponseField>
+
+**Example response — player is at a table**
+
+```json
+{ "tableId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" }
+```
+
+**Example response — player is not at a table**
+
+```json
+{ "tableId": null }
+```

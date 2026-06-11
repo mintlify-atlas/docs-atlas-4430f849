@@ -1,0 +1,227 @@
+---
+title: "PostgreSQL Schema and Migrations for Spades Online"
+sidebarTitle: "Database"
+description: "The Spades Online PostgreSQL schema: five migration files covering players, profiles, game history, password resets, friendships, and player blocks."
+---
+
+PostgreSQL is the durable store for all data that must survive a server restart or Redis flush: player accounts, profiles, completed game history, password-reset tokens, friendships, and player blocks. The schema is managed through five plain SQL migration files in `db/migrations/`, applied in order before the server starts. There is no migration framework — each file is idempotent (uses `IF NOT EXISTS` guards) and can be safely re-run against an already-migrated database.
+
+## Running migrations
+
+Apply the migrations in order using `psql`. Set `DATABASE_URL` to your connection string before running:
+
+```bash
+psql $DATABASE_URL -f db/migrations/001_create_players.sql
+psql $DATABASE_URL -f db/migrations/002_create_profile_and_games.sql
+psql $DATABASE_URL -f db/migrations/003_create_password_reset_tokens.sql
+psql $DATABASE_URL -f db/migrations/004_create_friendships.sql
+psql $DATABASE_URL -f db/migrations/005_create_player_blocks.sql
+```
+
+## Schema reference
+
+### 001 — Players and email verification tokens
+
+This migration creates the two tables required for account creation and email verification. The `players` table is the root identity record — every other table references it. The `email_verification_tokens` table holds one-time tokens emailed to new registrants; the token is deleted once the address is verified.
+
+```sql
+-- Migration 001: players and email verification tokens
+-- Run once against the primary database before starting the server.
+
+CREATE TABLE IF NOT EXISTS players (
+  id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         VARCHAR(255) UNIQUE NOT NULL,
+  username      VARCHAR(50)  UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  is_verified   BOOLEAN      NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  token      UUID        PRIMARY KEY,
+  player_id  UUID        NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Index for fast token lookup during email verification
+CREATE INDEX IF NOT EXISTS idx_evt_player_id ON email_verification_tokens(player_id);
+```
+
+`players.is_verified` defaults to `false`; the `POST /api/auth/login` endpoint rejects login with `403` until the flag is set to `true` by `GET /api/auth/verify-email`. The `email_verification_tokens` index on `player_id` speeds up the resend-verification lookup, which queries by player rather than by token.
+
+---
+
+### 002 — Player profiles and game history
+
+This migration creates three tables that together provide the public profile view returned by `GET /api/profile/:playerId`. `player_profiles` stores cosmetic settings (avatar icon, felt colour, card back). `games` records each completed game with final team scores. `game_players` is the join table linking a player to a specific game, capturing their seat, team, and win/loss outcome.
+
+```sql
+-- Migration 002: player profiles, games, and game_players
+-- Run once against the primary database before starting the server.
+
+CREATE TABLE IF NOT EXISTS player_profiles (
+  player_id   UUID        PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  avatar_icon SMALLINT    NOT NULL DEFAULT 1,
+  felt_color  VARCHAR(20) NOT NULL DEFAULT 'green',
+  card_back   VARCHAR(20) NOT NULL DEFAULT 'standard-red',
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS games (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  score_ns     INTEGER     NOT NULL DEFAULT 0,
+  score_ew     INTEGER     NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS game_players (
+  game_id   UUID       NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  player_id UUID       NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  seat      VARCHAR(10) NOT NULL,
+  team      CHAR(2)    NOT NULL,
+  won       BOOLEAN    NOT NULL,
+  PRIMARY KEY (game_id, player_id)
+);
+
+-- Index for fast profile lookups by player
+CREATE INDEX IF NOT EXISTS idx_game_players_player_id ON game_players(player_id);
+```
+
+The `game_players` index on `player_id` is critical for the profile endpoint, which fetches recent games for a given player across potentially many game rows. The `team` column holds `NS` or `EW`; `won` is derived from the final scores at the time the game is persisted.
+
+---
+
+### 003 — Password reset tokens
+
+This migration creates the table used by the forgot-password / reset-password flow. A token is generated when a player submits `POST /api/auth/forgot-password` and emailed as a link. The token is validated and deleted when the player submits `POST /api/auth/reset-password`. Tokens expire after one hour (`expires_at` is checked server-side before the password is updated).
+
+```sql
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token TEXT PRIMARY KEY,
+  player_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_player_id
+  ON password_reset_tokens (player_id);
+```
+
+The index on `player_id` allows the server to quickly check whether a player already has a pending reset token (to avoid accumulating stale rows) and to clean up old tokens by player rather than by scanning the whole table.
+
+---
+
+### 004 — Friendships
+
+This migration creates the `friendships` table, which tracks both pending friend requests and accepted friendships in a single row per directed pair. The `status` column holds `'pending'` until the addressee accepts; it is updated to `'accepted'` by `POST /api/friends/accept`. The migration includes upgrade logic to handle existing installations from an earlier schema that used different column names.
+
+```sql
+-- Migration: create or migrate friendships table
+--
+-- The table was originally created (issue #600) with columns player_id / friend_id.
+-- Issue #607 renamed them to requester_id / addressee_id and added updated_at.
+-- This migration handles both fresh installs and upgrades from the old schema.
+
+DO $$
+BEGIN
+  -- If the table does not exist, create it with the new schema.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'friendships') THEN
+    CREATE TABLE friendships (
+      id BIGSERIAL PRIMARY KEY,
+      requester_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      addressee_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT friendships_pair_unique UNIQUE (requester_id, addressee_id)
+    );
+  ELSE
+    -- Migrate from old schema if needed: rename columns
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'friendships' AND column_name = 'player_id'
+    ) THEN
+      ALTER TABLE friendships RENAME COLUMN player_id TO requester_id;
+      ALTER TABLE friendships RENAME COLUMN friend_id TO addressee_id;
+    END IF;
+
+    -- Add updated_at column if missing
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'friendships' AND column_name = 'updated_at'
+    ) THEN
+      ALTER TABLE friendships ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    END IF;
+
+    -- Drop old unique constraint if it exists and add new one
+    IF EXISTS (
+      SELECT 1 FROM information_schema.table_constraints
+      WHERE table_name = 'friendships' AND constraint_name = 'friendships_player_id_friend_id_key'
+    ) THEN
+      ALTER TABLE friendships DROP CONSTRAINT friendships_player_id_friend_id_key;
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.table_constraints
+      WHERE table_name = 'friendships' AND constraint_name = 'friendships_pair_unique'
+    ) THEN
+      ALTER TABLE friendships ADD CONSTRAINT friendships_pair_unique UNIQUE (requester_id, addressee_id);
+    END IF;
+  END IF;
+END
+$$;
+
+-- Bidirectional unique index: prevents duplicate friendships regardless of direction
+-- (e.g. Alice->Bob and Bob->Alice). The directional UNIQUE constraint above only
+-- prevents exact duplicates; this index covers the reverse-pair race condition.
+CREATE UNIQUE INDEX IF NOT EXISTS friendships_pair_unique_bidi
+ON friendships (LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id));
+```
+
+The bidirectional unique index (`friendships_pair_unique_bidi`) is important: the directional `UNIQUE(requester_id, addressee_id)` constraint only prevents Alice from sending Bob a second request, but does not prevent a race where Alice sends Bob a request at the same time Bob sends Alice a request. The `LEAST`/`GREATEST` index collapses both directions into the same key.
+
+---
+
+### 005 — Player blocks
+
+This migration creates the `player_blocks` table used by the blocking system. A block record prevents the blocked player from sending friend requests and is checked before any social action. Blocking is directional — `blocker_id` blocked `blocked_id` — but the `isBlockedEitherDirection` helper checks both directions so the effect is mutual.
+
+```sql
+CREATE TABLE IF NOT EXISTS player_blocks (
+  id BIGSERIAL PRIMARY KEY,
+  blocker_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  blocked_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(blocker_id, blocked_id)
+);
+```
+
+The `UNIQUE(blocker_id, blocked_id)` constraint makes blocking idempotent — attempting to block an already-blocked player returns `201` silently without creating a duplicate row.
+
+---
+
+## Redis ephemeral data
+
+The following data is stored exclusively in Redis and is **not persisted to PostgreSQL**. It is intentionally ephemeral: it is reconstructed from in-progress game state or simply expires.
+
+| Key pattern | Contents |
+|---|---|
+| `session:{sessionId}` | Session record: `playerId`, `email`, `username` |
+| `table:{tableId}` | Full table object: seats, observers, status, visibility, join policy, host |
+| `game:{tableId}` | Full game state: hands, bids, tricks, scores, phase |
+| `presence:{playerId}` | Player presence: `{ status: 'online' \| 'playing', tableId }` |
+| `lobby:tables` | Hash of public waiting tables for the lobby browser |
+| `lobby:all` | Hash of all active tables (used for presence reconciliation) |
+| `player:{tableId}` | Reverse index: tableId for a seated player |
+| `joinlink:{token}` | Single-use join link: `{ tableId, createdAt }` |
+| `spectatorlink:{token}` | Multi-use spectator link: `{ tableId }` |
+| `invite:{tableId}:{playerId}` | Active invite duplicate-check key |
+| `invite:id:{inviteId}` | Full invite record (used by the decline endpoint) |
+| `invited:{tableId}` | Set of player IDs invited to a table (bypasses join policy) |
+| `ratelimit:*` | Per-IP rate-limit counters (auth and social endpoints) |
+
+<Note>
+  All Redis keys related to a table are cleaned up when the table is terminated — either by the host, because all players left, or on expiry. Sessions expire with a TTL set at creation time. Presence keys carry a 1-hour safety-net TTL so stale keys cannot accumulate if a server crashes before the cleanup on disconnect fires.
+</Note>

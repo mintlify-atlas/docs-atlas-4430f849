@@ -1,0 +1,120 @@
+---
+title: "Spades Rules: How the Game Works on Spades Online"
+sidebarTitle: "Rules"
+description: "The standard Spades ruleset implemented by Spades Online: partnerships, dealing, bidding, playing tricks, and winning the game."
+---
+
+Spades Online implements a standard 4-player partnership Spades ruleset. This page walks through how a game flows from table setup through the final hand — from how seats are assigned and cards are dealt, all the way to the conditions that end the game. For scoring details see [Scoring](/game/scoring), and for Blind Nil specifics see [Blind Nil](/game/blind-nil).
+
+## Teams & Seating
+
+Every table seats exactly four players split into two fixed partnerships: **North/South** versus **East/West**. Seats do not rotate — once you are seated, you stay in that seat for the entire game. Your partner is always the player directly across the table from you.
+
+<CardGroup cols={2}>
+  <Card title="North / South" icon="users">
+    North and South are partners. They share a combined bid target and a combined score throughout the game.
+  </Card>
+  <Card title="East / West" icon="users">
+    East and West are partners. They share a combined bid target and a combined score throughout the game.
+  </Card>
+</CardGroup>
+
+**Dealer rotation:** North deals the very first hand. After each hand the dealer button moves one seat clockwise — North → East → South → West → North — and continues rotating for the rest of the game.
+
+## Dealing
+
+At the start of each hand the server builds a standard 52-card deck (no jokers), shuffles it, and deals 13 cards to each player. Cards are sorted in your hand by suit and then by rank — this display order is fixed and cannot be changed.
+
+<Note>
+  The suit order used for sorting is: Spades → Hearts → Clubs → Diamonds. Within each suit cards run from Ace (highest) down to 2 (lowest).
+</Note>
+
+## Bidding Phase
+
+After the deal, each player makes a bid — a commitment to win a certain number of tricks during that hand.
+
+**Bid values:** Any integer from 0 to 13. A bid of `0` is a [Nil bid](/game/blind-nil). A bid of `-1` (submitted as `"blind_nil"` in the API) is a [Blind Nil bid](/game/blind-nil), subject to eligibility rules.
+
+**Bidding order:** Bidding starts with the player to the dealer's left and proceeds clockwise around the table. The second team member to bid always sees their partner's bid before they act.
+
+**Partnership bidding:** The second bidder on each team sets the **team's combined total**, not just their own hand's worth. This combined total becomes the team's bid target for the hand.
+
+> **Example:** North bids 4. South (bidding second for N/S) sees the 4 and enters a team total of 7. The team target is 7 — South has effectively bid 3 tricks for themselves.
+
+<Note>
+  If the second bidder enters a team total *lower* than the first bidder's individual bid, that is a legal strategic choice. Every trick the team takes above the team total will be a bag. See [Scoring](/game/scoring) for the bag penalty rules.
+</Note>
+
+Special bids (Nil and Blind Nil) stand on their own — they are not folded into the team total. If North bids Nil, South bids only their own hand.
+
+## Playing Phase
+
+Once all four bids are placed (and any Blind Nil card exchange is complete), play begins with the **player to the dealer's left** making the opening lead.
+
+### Following Suit
+
+Players **must follow the led suit** if they have any cards in that suit. You may only play a card of a different suit — including a Spade — when you have no cards of the led suit remaining.
+
+### Spades as Trump
+
+Spades are the permanent trump suit. A Spade beats any non-Spade card, regardless of rank.
+
+**Spades breaking:** Spades cannot be led until they have been "broken." Spades break the first time any player plays a Spade because they cannot follow the led suit. Once broken, Spades may be led freely on any subsequent trick.
+
+### Winning a Trick
+
+- If one or more Spades were played, the **highest Spade** wins.
+- If no Spades were played, the **highest card of the led suit** wins.
+- Cards of a non-led, non-Spade suit can never win a trick.
+
+The winner of each trick leads the next one.
+
+### First Trick Restriction
+
+On the very first trick of a hand, a Spade **may not be played** even if a player has no cards in the led suit. If a player has nothing but Spades when they cannot follow suit on trick one, only then may they play a Spade. Leading a Spade on the first trick is never allowed.
+
+<Warning>
+  The first-trick Spade restriction is enforced server-side. The server's `getLegalPlays` function filters Spades from the legal-play set on trick one whenever a non-Spade alternative exists.
+</Warning>
+
+## Game End
+
+<CardGroup cols={2}>
+  <Card title="Win at 250" icon="trophy">
+    The first team to reach **250 points** at the end of a hand wins. If both teams reach 250 in the same hand, the higher score wins. An exact tie triggers an extra hand, repeated until the tie is broken.
+  </Card>
+  <Card title="Lose at −250" icon="circle-xmark">
+    A team whose score drops to **−250 or below** loses immediately. If both teams hit −250 in the same hand, the higher (less negative) score wins. An exact tie again triggers an extra hand.
+  </Card>
+</CardGroup>
+
+## Table Creation Options
+
+When creating a table you can configure:
+
+| Option | Choices |
+|---|---|
+| Table name | Optional display name shown in the lobby |
+| Visibility | Public · Friends-Only · Private |
+| Join policy | Open · Friends-Only · Invite-Only |
+| Spectating | Allowed or disallowed |
+
+See [Create Table](/api/tables/create) for the full API reference, including how visibility and join policy interact.
+
+## Bot Players
+
+When a human player leaves a game in progress, the server immediately replaces their seat with a bot so the hand can continue without interruption.
+
+<Accordion title="How bots bid">
+  Bots count the number of Spades in their hand and bid that number. When a bot is the **second bidder** for its team, it adds the partner's bid to its own Spades count to produce the correct team total — for example, if the partner bid 3 and the bot holds 4 Spades, the bot bids a team total of 7.
+
+  Bots **never** bid Nil or Blind Nil.
+</Accordion>
+
+<Accordion title="How bots play">
+  Bots select a card uniformly at random from the set of **legal plays** for the current trick. The same legal-play rules that apply to human players — suit-following, Spades breaking, first-trick restrictions — constrain the bot's choices.
+</Accordion>
+
+<Accordion title="Bot player IDs">
+  Bot IDs follow the pattern `bot:<seat>` (for example, `bot:north` or `bot:east`). When a seat is filled by a bot you will see this identifier in the game state's `players` map.
+</Accordion>

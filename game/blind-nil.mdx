@@ -1,0 +1,92 @@
+---
+title: "Blind Nil: Rules and Card Exchange Protocol"
+sidebarTitle: "Blind Nil"
+description: "How Blind Nil works in Spades Online: eligibility, the two-step card exchange, reveal-hand forfeiture, and the +100 / -100 scoring outcome."
+---
+
+Blind Nil is a high-stakes bid where a player commits to winning **zero tricks** before they have even seen their cards. If they succeed, their team earns **+100 points**. If they take even a single trick, the team loses **−100 points**. The risk is offset by a two-card exchange with their partner and, when it pays off, can swing a game decisively in a losing team's favor.
+
+## Eligibility
+
+Blind Nil is not always available. The server enforces two conditions before allowing the bid:
+
+1. **Score gap:** A player may only bid Blind Nil if their team is **at least 100 points behind** the opposing team. This is checked by `isEligibleForBlindNil` in `server/game/bid.js`.
+2. **One per team per hand:** Only one player per team may bid Blind Nil in a given hand. If your partner has already bid Blind Nil, the option is unavailable to you.
+
+<Warning>
+  Blind Nil eligibility is evaluated at the start of bidding. The server withholds the eligible player's cards from the initial `HAND_DEALT` event — cards are only transmitted after the player takes an explicit action. This is a server-side enforcement; client-side hiding alone is not sufficient.
+</Warning>
+
+When your team is eligible, you are presented with two choices before the hand begins:
+
+- **Reveal Hand** — view your 13 cards and bid normally, forfeiting Blind Nil eligibility.
+- **Bid Blind Nil** — commit to the Blind Nil bid without ever seeing your hand before the exchange.
+
+## Reveal Hand
+
+At any point during the Blind Nil eligibility window — before you have placed a bid — you may call the reveal-hand endpoint to view your cards. Once you do, Blind Nil is no longer available to you for this hand and you must bid normally (0–13 or Nil).
+
+See [Bidding API](/api/game/bidding) for the full request and response shape.
+
+<Note>
+  The ineligible team's players receive their cards immediately with the `HAND_DEALT` event and may place their bids while eligible players are still deciding whether to reveal or bid Blind Nil.
+</Note>
+
+## Card Exchange
+
+After all four players have bid, but before the opening lead, a card exchange takes place between the Blind Nil bidder and their partner. The exchange always flows in two steps.
+
+<Steps>
+  <Step title="Blind Nil player sends 2 cards to their partner">
+    The Blind Nil player selects exactly 2 cards from their (still-unseen) hand and passes them face-down to their partner. The player submits the exchange via:
+
+    ```http
+    POST /api/tables/:tableId/blind-nil-exchange
+    Content-Type: application/json
+
+    {
+      "cards": ["AS", "KS"]
+    }
+    ```
+
+    The server removes those 2 cards from the Blind Nil player's hand and holds them until the partner responds.
+  </Step>
+  <Step title="Partner sends 2 cards back to the Blind Nil player">
+    The partner selects 2 cards from their own hand and passes them back to the Blind Nil player, using the same endpoint and payload shape.
+
+    The server completes the swap: the partner receives the Blind Nil player's 2 cards, and the Blind Nil player receives the partner's 2 cards. Both hands are re-sorted.
+  </Step>
+  <Step title="Exchange complete — play begins">
+    Once the exchange is finished, the game transitions to the playing phase. The player to the dealer's left makes the opening lead. Both the Blind Nil bidder and their partner now hold 13 cards each, with the exchange reflected in their hands.
+  </Step>
+</Steps>
+
+<Note>
+  If a bot is the partner of a Blind Nil bidder, the bot selects 2 cards at random to return (via `botBlindNilExchange` in `server/game/bot.js`). Bots themselves never bid Blind Nil.
+</Note>
+
+## Rules During Play
+
+The Blind Nil bidder plays under the same trick-following rules as every other player — they must follow suit, obey the first-trick Spade restriction, and so on. The special rules that apply to them concern **how their tricks are counted**:
+
+- If the Blind Nil bidder takes **zero tricks**, their Nil is made.
+- If they take **any tricks**, their Nil is broken — regardless of how many.
+- Tricks taken by the Blind Nil bidder count toward their **partner's bid**. If those extra tricks push the partner's combined total above the team bid, they become bags.
+- If **both** players on a team bid Nil or Blind Nil (a "double Nil"), there is no team bid target. Every trick either player takes is a bag *and* breaks that individual's Nil.
+
+## Scoring
+
+| Result | Points |
+|---|---|
+| Blind Nil made (0 tricks taken) | **+100** for the Blind Nil player's team |
+| Blind Nil broken (1+ tricks taken) | **−100** for the Blind Nil player's team |
+
+The Blind Nil outcome is scored in addition to the team bid result. For full scoring details, including how bags and the 10-bag penalty interact with Blind Nil hands, see [Scoring](/game/scoring).
+
+## API Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/tables/:tableId/bid` with `{"bid": -1}` | Bid Blind Nil (server uses `"blind_nil"` internally; clients send `-1`) |
+| `POST /api/tables/:tableId/reveal-hand` | Reveal hand during the Blind Nil eligibility window, forfeiting Blind Nil |
+| `POST /api/tables/:tableId/blind-nil-exchange` | Submit one step of the card exchange (called twice: once by the Blind Nil player, once by their partner) |

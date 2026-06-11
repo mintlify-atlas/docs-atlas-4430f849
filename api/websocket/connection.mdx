@@ -1,0 +1,161 @@
+---
+title: "Connect to the Spades Online WebSocket Server"
+sidebarTitle: "Connection"
+description: "Authenticate, connect, and subscribe to table rooms and the lobby channel over WebSocket. Messages use JSON envelopes with type and payload fields."
+---
+
+The Spades Online WebSocket server authenticates every connection at the HTTP upgrade stage — no anonymous connections are accepted. Once connected, all communication uses a consistent JSON envelope: `{ "type": "<TYPE>", "payload": { ... } }`. Clients subscribe to specific rooms (table rooms or the lobby channel) to receive the events relevant to them.
+
+## Connecting
+
+**URL:** `ws://hostname:port/` — use `wss://` in production.
+
+The server reads the session token from the `x-session-id` upgrade header. If the header is missing or the session is invalid, the server responds with `HTTP 401` and closes the socket immediately. Browser clients, which cannot set custom headers on a WebSocket upgrade, pass the token as a `sessionId` URL query parameter instead (see the browser example below).
+
+**Required header (non-browser clients):**
+
+```
+x-session-id: <sessionId>
+```
+
+**Browser client** — pass the session token as a query parameter since browsers cannot set custom headers on the WebSocket upgrade:
+
+```javascript
+// buildWsUrl() appends ?sessionId=<encoded> for you (see client/web/src/gameSocket.js)
+const wsUrl = `wss://your-app.example.com/?sessionId=${encodeURIComponent(sessionId)}`;
+const ws = new WebSocket(wsUrl);
+// Note: browsers cannot set custom headers on WebSocket upgrade;
+// the web client passes the session via a URL query parameter.
+// Server-side or non-browser clients can set x-session-id directly.
+```
+
+**Node.js client** (e.g. for integration tests) — set the header directly:
+
+```javascript
+import { WebSocket } from 'ws';
+
+const ws = new WebSocket('ws://localhost:3000/', {
+  headers: { 'x-session-id': sessionId }
+});
+```
+
+## Message Format
+
+All messages — in both directions — are JSON objects using the same envelope:
+
+```json
+{ "type": "<TYPE>", "payload": { ... } }
+```
+
+The `type` field is always a string constant. The `payload` field is an object; for messages with no meaningful data it is an empty object `{}`.
+
+## Subscribing to Table Rooms
+
+Subscribe to a table room to receive all real-time game and table events for a specific table.
+
+<Steps>
+  <Step title="Send a JOIN message">
+    After the connection is open, send a `JOIN` message with the target table's UUID:
+
+    ```json
+    { "type": "JOIN", "payload": { "tableId": "<uuid>" } }
+    ```
+  </Step>
+  <Step title="Receive the JOINED acknowledgement">
+    The server verifies that the authenticated player is seated at or observing the table, then responds with:
+
+    ```json
+    { "type": "JOINED", "payload": { "tableId": "<uuid>" } }
+    ```
+
+    If the player is not seated or observing, the server sends `JOIN_DENIED` instead — see the [JOIN\_DENIED](#join-denied) section below.
+  </Step>
+  <Step title="Receive table events">
+    From this point on, all events broadcast to `table:{tableId}` are delivered to this connection. See the [Events](/api/websocket/events) reference for the full list.
+  </Step>
+  <Step title="Unsubscribe with LEAVE">
+    To stop receiving events for the table, send:
+
+    ```json
+    { "type": "LEAVE", "payload": { "tableId": "<uuid>" } }
+    ```
+
+    The server acknowledges with a `LEFT` message:
+
+    ```json
+    { "type": "LEFT", "payload": { "tableId": "<uuid>" } }
+    ```
+  </Step>
+</Steps>
+
+## Subscribing to the Lobby
+
+Subscribe to the lobby channel to receive real-time notifications when public tables are created, updated, or removed.
+
+<Steps>
+  <Step title="Send a JOIN_LOBBY message">
+    ```json
+    { "type": "JOIN_LOBBY", "payload": {} }
+    ```
+  </Step>
+  <Step title="Receive the JOINED_LOBBY acknowledgement">
+    ```json
+    { "type": "JOINED_LOBBY", "payload": {} }
+    ```
+  </Step>
+  <Step title="Receive lobby events">
+    The server delivers `TABLE_CREATED`, `TABLE_UPDATED`, and `TABLE_REMOVED` events for public tables. Friends-only and private tables are never broadcast on the public lobby channel — friends-only events are delivered to the host's friends' personal notification channels instead. See [Lobby events](/api/websocket/events#lobby-events) for routing details.
+  </Step>
+  <Step title="Unsubscribe with LEAVE_LOBBY">
+    ```json
+    { "type": "LEAVE_LOBBY", "payload": {} }
+    ```
+
+    The server acknowledges with:
+
+    ```json
+    { "type": "LEFT_LOBBY", "payload": {} }
+    ```
+  </Step>
+</Steps>
+
+## JOIN\_DENIED
+
+If a `JOIN` request is rejected, the server sends a `JOIN_DENIED` message instead of `JOINED`:
+
+```json
+{
+  "type": "JOIN_DENIED",
+  "payload": {
+    "tableId": "<uuid>",
+    "reason": "not_seated" | "table_not_found" | "error"
+  }
+}
+```
+
+| Reason | Meaning |
+|---|---|
+| `not_seated` | The authenticated player is neither seated at nor observing the table. |
+| `table_not_found` | No table with the given `tableId` exists. |
+| `error` | An internal error occurred (e.g. Redis unavailable). |
+
+## Personal Notification Channel
+
+<Note>
+  Each authenticated connection is automatically subscribed to a personal Redis pub/sub channel — `player:{playerId}:notify` — at the time of connection. No client action is required. This channel delivers friend requests, in-app invites, kick notifications, and friends-only table events directly to the target player across all server instances. The subscription is cleaned up automatically when the connection closes.
+</Note>
+
+## Heartbeat
+
+The server sends a WebSocket **ping every 30 seconds**. Clients must respond with a pong frame; standard WebSocket clients (browsers, the `ws` Node.js library) handle this automatically. If no pong is received within **10 seconds** of the ping, the connection is terminated.
+
+The web client (`gameSocket.js` / `createGameSocket`) implements exponential-backoff reconnection: on an unexpected disconnect it retries up to 5 times with delays of 1 s, 2 s, 4 s, 8 s, and 16 s (capped at 30 s).
+
+## Client Messages Reference
+
+| Type | Payload | Description |
+|---|---|---|
+| `JOIN` | `{ tableId }` | Subscribe to table room events. Acknowledged with `JOINED` or `JOIN_DENIED`. |
+| `LEAVE` | `{ tableId }` | Unsubscribe from a table room. Acknowledged with `LEFT`. |
+| `JOIN_LOBBY` | `{}` | Subscribe to lobby events. Acknowledged with `JOINED_LOBBY`. |
+| `LEAVE_LOBBY` | `{}` | Unsubscribe from lobby events. Acknowledged with `LEFT_LOBBY`. |

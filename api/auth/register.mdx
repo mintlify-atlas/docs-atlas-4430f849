@@ -1,0 +1,138 @@
+---
+title: "Register and Verify a Spades Online Account"
+sidebarTitle: "Registration"
+description: "POST /api/auth/register creates a new player account and sends a verification email. GET /api/auth/verify-email activates the account using the emailed token."
+---
+
+Registration creates a new player account identified by email address, display username, and password. The account is inactive immediately after registration — the player must click the verification link sent to their email before they can log in. Once verified, the account is permanently active and the token is consumed.
+
+---
+
+## POST /api/auth/register
+
+Creates a new player account and sends a verification email containing a single-use activation link.
+
+| | |
+|---|---|
+| **Method** | `POST` |
+| **Path** | `/api/auth/register` |
+| **Auth required** | None |
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The player's email address. Must be a valid email format. Stored normalized to lowercase.
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The display name shown to other players in the lobby and at the table. Stored with original casing; must be unique across all accounts.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password. Minimum 8 characters. Stored as a bcrypt hash — the plaintext is never persisted.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "alice@example.com", "username": "alice", "password": "hunter2abc"}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|---|---|
+| `201` | Registration successful. Verification email sent. |
+| `400` | Missing or invalid fields (e.g. password fewer than 8 characters, missing email). |
+| `409` | Email address or username is already registered to another account. |
+
+### 201 response body
+
+<ResponseField name="message" type="string">
+  A human-readable confirmation that registration succeeded and a verification email has been sent.
+</ResponseField>
+
+<ResponseField name="playerId" type="string">
+  The UUID assigned to the newly created player account.
+</ResponseField>
+
+```json
+{
+  "message": "Registration successful. Please check your email to verify your account.",
+  "playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+---
+
+## GET /api/auth/verify-email
+
+Activates a player account by validating the token from the verification email. Tokens are single-use and expire 24 hours after registration.
+
+| | |
+|---|---|
+| **Method** | `GET` |
+| **Path** | `/api/auth/verify-email` |
+| **Auth required** | None |
+
+### Query parameters
+
+<ParamField query="token" type="string" required>
+  The UUID verification token included in the registration email link. Tokens expire after 24 hours and are deleted after first use.
+</ParamField>
+
+### Response codes
+
+| Status | Meaning |
+|---|---|
+| `200` | Email verified. The account is now active and the player can log in. |
+| `400` | Token is missing, invalid, already used, or has expired. |
+
+### Local development
+
+<Note>
+  If you do not have an SMTP server configured locally, set `DEV_AUTO_VERIFY=true` when starting the server. With this flag, `POST /api/auth/register` marks the account as verified immediately — no email is sent and no token is required. The player can log in straight away. **Never set `DEV_AUTO_VERIFY` in production** — the server ignores it when `NODE_ENV=production`.
+
+  ```bash
+  DEV_AUTO_VERIFY=true npm start
+  ```
+</Note>
+
+---
+
+## POST /api/auth/resend-verification
+
+Sends a fresh verification email to an unverified account. Any previously issued token is deleted before a new one is generated.
+
+| | |
+|---|---|
+| **Method** | `POST` |
+| **Path** | `/api/auth/resend-verification` |
+| **Auth required** | None |
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address of the unverified account.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:3000/api/auth/resend-verification \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "alice@example.com"}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|---|---|
+| `200` | Request accepted. If the email is registered and unverified, a new verification link has been sent. |
+| `500` | Internal server error. |
+
+<Note>
+  This endpoint always returns `200`, even when the supplied email address is not found in the database or the account is already verified. This behaviour is intentional — it prevents account enumeration by making it impossible for an unauthenticated caller to determine whether a given email address is registered.
+</Note>

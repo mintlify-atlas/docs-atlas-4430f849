@@ -1,0 +1,87 @@
+---
+title: "Scoring, Bags, and Win Conditions in Spades Online"
+sidebarTitle: "Scoring"
+description: "How Spades Online scores each hand: trick targets, overtrick bags, the 100-point bag penalty, Nil bonuses and penalties, and win/loss conditions."
+---
+
+Scoring in Spades Online happens at the end of each hand, once all 13 tricks have been played. The server computes every team's score delta, accumulates overtrick bags, applies any bag-penalty deductions, and checks for a win or loss — all in `server/game/score.js` via the functions `scoreHand`, `applyBagPenalties`, and `checkWinLoss`.
+
+## Per-Hand Scoring
+
+The table below covers every scoring outcome the server can apply in a single hand.
+
+| Outcome | Points |
+|---|---|
+| Team meets or exceeds bid | +10 × team bid |
+| Team falls short of bid | −10 × team bid |
+| Nil bid: made (0 tricks taken) | +50 for the Nil player's team |
+| Nil bid: broken (1 or more tricks taken) | −50 for the Nil player's team |
+| Blind Nil bid: made (0 tricks taken) | +100 for the Blind Nil player's team |
+| Blind Nil bid: broken (1 or more tricks taken) | −100 for the Blind Nil player's team |
+| Each overtrick (bag) | +1 |
+
+<Note>
+  Nil and Blind Nil bonuses or penalties are scored **in addition to** the team bid result. For example, if North bids Nil and South bids a team total of 4, the team earns both the ±50 Nil outcome *and* the ±40 team-bid outcome.
+</Note>
+
+## Bags
+
+An **overtrick** (also called a **bag**) is any trick a team takes beyond their combined bid. Each bag earns the team +1 point that hand, but bags accumulate across hands and trigger a penalty.
+
+**The 10-bag penalty:** Every time a team's total bag count crosses a multiple of 10, **100 points are deducted** from that team's score and the 10 bags that caused the crossing are reset. The `applyBagPenalties` function in `server/game/score.js` handles this calculation after each hand.
+
+<Note>
+  Tricks won by a Nil or Blind Nil bidder count toward their **partner's** bid. If those tricks push the partner's combined total above the team bid, they become bags. If both players on a team bid Nil or Blind Nil (a "double Nil"), there is no team bid target — every trick either player takes is a bag and breaks that individual's Nil.
+</Note>
+
+<Tip>
+  Strategically, teams sometimes set a team bid *lower* than the first bidder's individual bid. This is legal, but every trick above the lower team total becomes a bag — use it carefully when you are close to the 10-bag threshold.
+</Tip>
+
+## Win Conditions
+
+<CardGroup cols={2}>
+  <Card title="Win" icon="trophy">
+    First team to reach **250 points** wins. If both teams reach 250 in the same hand, the higher score wins. An exact tie means an additional hand is played; this repeats until the tie is broken.
+  </Card>
+  <Card title="Loss" icon="circle-xmark">
+    A team whose score reaches **−250 or below** loses immediately. If both teams hit −250 in the same hand, the higher (less negative) score wins. An exact tie again triggers an additional hand.
+  </Card>
+</CardGroup>
+
+The `checkWinLoss` function in `server/game/score.js` evaluates both conditions after every hand and returns the winning team, or `null` when play must continue.
+
+## Worked Example
+
+Consider a single hand where N/S bid 7 and E/W bid 5.
+
+**Tricks taken:** N/S take 9 tricks · E/W take 4 tricks
+
+**N/S scoring:**
+- Met bid (9 ≥ 7): **+70** (10 × 7)
+- Overtricks: 9 − 7 = 2 bags → **+2**
+- N/S hand total: **+72**
+
+**E/W scoring:**
+- Missed bid (4 < 5): **−50** (10 × 5)
+- No bags (they didn't meet their bid)
+- E/W hand total: **−50**
+
+**Running score after the hand** (assuming both teams started at 0):
+
+| Team | Score Before | Hand Delta | Bags Earned | Score After | Bag Total |
+|---|---|---|---|---|---|
+| N/S | 0 | +72 | 2 | **+72** | 2 |
+| E/W | 0 | −50 | 0 | **−50** | 0 |
+
+If N/S already held 9 bags before this hand, the 2 new bags would cross the 10-bag threshold, triggering a **−100 penalty**: the hand delta of +72 would be reduced by 100 to −28, and the bag counter would reset to 1.
+
+## Scoring Code
+
+The three key functions in `server/game/score.js` are:
+
+| Function | Responsibility |
+|---|---|
+| `scoreHand({ bids, teamBids, tricksWon })` | Computes the score delta and new bag count for a completed hand; handles team bids, Nil, Blind Nil, and double-Nil cases |
+| `applyBagPenalties(scores, bags, newBags)` | Adds new bags to the running total, deducts 100 points per complete set of 10, and resets the used bags |
+| `checkWinLoss(scores)` | Returns `{ winner, loser }` when a win or loss condition is met, or `null` when play continues |

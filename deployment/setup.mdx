@@ -1,0 +1,289 @@
+---
+title: "Deploy Spades Online: Railway, Vercel, and Self-Hosted"
+sidebarTitle: "Setup"
+description: "Step-by-step deployment guide for Spades Online: self-hosting on a Linux server, deploying to Railway, or splitting frontend and WebSocket across Vercel and Railway."
+---
+
+Spades Online is a single Node.js process that serves the web client, HTTP API, and WebSocket connections all on one port — no separate build step required. It can be deployed as a unified service on any Node.js host, or split across two platforms: Vercel handles the static web client and HTTP API routes while Railway runs the WebSocket server separately. Both models are fully supported and share the same codebase.
+
+## Prerequisites
+
+Before deploying, make sure you have the following ready:
+
+- **Node.js 18+** — the server is ES Module-only (`"type": "module"`) and targets Node.js 18 or later
+- **PostgreSQL** — any cloud-managed instance (Railway, Supabase, Neon, RDS) or self-hosted; used for persistent player and game data
+- **Redis** — any cloud-managed instance (Railway, Upstash, Redis Cloud) or self-hosted; used for session state, lobby presence, pub/sub, and rate limiting
+
+<Tabs>
+  <Tab title="Self-Hosted">
+    Deploy Spades Online on your own Linux server (or any machine with Node.js installed) behind a reverse proxy for TLS termination.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/Antonelli-Tech-Solutions/spades.git
+        cd spades
+        ```
+      </Step>
+
+      <Step title="Install dependencies">
+        ```bash
+        npm install
+        ```
+      </Step>
+
+      <Step title="Set environment variables">
+        Export the required variables before starting the server. At minimum, `DATABASE_URL` and `REDIS_URL` are required:
+
+        ```bash
+        export DATABASE_URL="postgresql://user:password@localhost:5432/spades"
+        export REDIS_URL="redis://localhost:6379"
+        export PORT=3000
+        export NODE_ENV=production
+        export APP_URL="https://spades.example.com"
+        ```
+
+        See the [full environment variable reference](#environment-variables) below for the complete list of optional variables.
+      </Step>
+
+      <Step title="Run database migrations">
+        Apply all migration files in order against your PostgreSQL instance:
+
+        ```bash
+        psql $DATABASE_URL -f db/migrations/001_create_players.sql
+        psql $DATABASE_URL -f db/migrations/002_create_profile_and_games.sql
+        psql $DATABASE_URL -f db/migrations/003_create_password_reset_tokens.sql
+        psql $DATABASE_URL -f db/migrations/004_create_friendships.sql
+        psql $DATABASE_URL -f db/migrations/005_create_player_blocks.sql
+        ```
+      </Step>
+
+      <Step title="Start the server">
+        ```bash
+        npm start
+        ```
+
+        This runs `node server/app.js`. The server listens on `PORT` (default `3000`) and serves the web client, all API routes, and the WebSocket endpoint on the same port.
+      </Step>
+
+      <Step title="Configure a reverse proxy for TLS">
+        For production, run Spades Online behind **nginx** or **Caddy** to handle TLS termination and forward traffic to the Node.js process.
+
+        Example Caddy configuration:
+
+        ```
+        spades.example.com {
+          reverse_proxy localhost:3000
+        }
+        ```
+
+        <Note>
+          WebSocket upgrade requests are proxied automatically by both nginx and Caddy when using a standard `reverse_proxy` or `proxy_pass` directive — no special WebSocket-specific configuration is needed as long as the WebSocket server shares the HTTP port (the default).
+        </Note>
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Railway">
+    Railway can host the entire Spades Online stack — Node.js server, PostgreSQL, and Redis — as managed services in a single project.
+
+    <Steps>
+      <Step title="Connect your repository">
+        In the Railway dashboard, create a new project and connect your GitHub repository. Railway will detect the Node.js project automatically.
+      </Step>
+
+      <Step title="Review the Railway configuration">
+        The repository includes a `railway.toml` that tells Railway how to start the server:
+
+        ```toml
+        [deploy]
+        startCommand = "node server/app.js"
+        ```
+
+        Railway reads this file and uses the `startCommand` instead of the default `npm start`. No additional build configuration is needed since Spades Online has no build step.
+      </Step>
+
+      <Step title="Add PostgreSQL and Redis add-ons">
+        In your Railway project, click **New** → **Database** and add both a **PostgreSQL** and a **Redis** service. Railway will automatically inject `DATABASE_URL` and `REDIS_URL` as environment variables into your application service.
+      </Step>
+
+      <Step title="Set environment variables">
+        In the Railway service settings, set the following variables under the **Variables** tab:
+
+        | Variable | Value |
+        |---|---|
+        | `DATABASE_URL` | Injected automatically by Railway PostgreSQL add-on |
+        | `REDIS_URL` | Injected automatically by Railway Redis add-on |
+        | `PORT` | Set by Railway automatically |
+        | `APP_URL` | Your Railway public domain, e.g. `https://my-app.up.railway.app` |
+        | `NODE_ENV` | `production` |
+      </Step>
+
+      <Step title="Run database migrations">
+        Open the Railway shell for your service (or use the Railway CLI) and run the migration files:
+
+        ```bash
+        psql $DATABASE_URL -f db/migrations/001_create_players.sql
+        psql $DATABASE_URL -f db/migrations/002_create_profile_and_games.sql
+        psql $DATABASE_URL -f db/migrations/003_create_password_reset_tokens.sql
+        psql $DATABASE_URL -f db/migrations/004_create_friendships.sql
+        psql $DATABASE_URL -f db/migrations/005_create_player_blocks.sql
+        ```
+      </Step>
+
+      <Step title="Deploy">
+        Push to your connected branch or trigger a manual deploy from the Railway dashboard. Railway will start the server using `node server/app.js`.
+
+        <Tip>
+          Railway provides a public domain automatically. Set it as `APP_URL` so that verification emails and join links contain correct URLs.
+        </Tip>
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Vercel + Railway (Split Host)">
+    In split-host mode, **Vercel** serves the static web client and handles HTTP API requests, while **Railway** runs the WebSocket server on a separate host. This is useful when you want Vercel's global edge network for the frontend while keeping a persistent WebSocket process on Railway.
+
+    <Warning>
+      In split-host mode, the reverse proxy must be configured to route WebSocket upgrade requests arriving on the public HTTP port to the `WS_PORT` on the Railway server. If WebSocket upgrades are not correctly forwarded, clients will fail to establish real-time connections even though HTTP requests succeed.
+    </Warning>
+
+    <Steps>
+      <Step title="Deploy the HTTP server to Vercel">
+        The repository includes a `vercel.json` that routes all requests through `server/app.js`:
+
+        ```json
+        {
+          "version": 2,
+          "builds": [
+            { "src": "server/app.js", "use": "@vercel/node" }
+          ],
+          "routes": [
+            { "src": "/(.*)", "dest": "server/app.js" }
+          ]
+        }
+        ```
+
+        Import the repository in the Vercel dashboard and deploy. Vercel will use this configuration automatically.
+      </Step>
+
+      <Step title="Deploy the WebSocket server to Railway">
+        Create a separate Railway service from the same repository. This instance will handle all WebSocket connections.
+
+        Set `WS_PORT` to a dedicated port on the Railway service so the WebSocket server runs independently:
+
+        ```bash
+        WS_PORT=3001
+        ```
+      </Step>
+
+      <Step title="Set environment variables on Vercel">
+        In the Vercel project settings, add the following variables:
+
+        | Variable | Value |
+        |---|---|
+        | `DATABASE_URL` | Your PostgreSQL connection string |
+        | `REDIS_URL` | Your Redis connection string |
+        | `APP_URL` | Your Vercel deployment URL |
+        | `WS_URL` | The full WebSocket base URL of your Railway service, e.g. `wss://my-ws-server.up.railway.app` |
+        | `NODE_ENV` | `production` |
+
+        The server injects `WS_URL` as `window.__WS_URL__` in the served HTML so the web client connects to the Railway WebSocket host instead of the Vercel host.
+      </Step>
+
+      <Step title="Set environment variables on Railway">
+        In the Railway service settings, set:
+
+        | Variable | Value |
+        |---|---|
+        | `DATABASE_URL` | Your PostgreSQL connection string |
+        | `REDIS_URL` | Your Redis connection string |
+        | `WS_PORT` | `3001` (or your chosen dedicated WebSocket port) |
+        | `NODE_ENV` | `production` |
+      </Step>
+
+      <Step title="Run database migrations">
+        Run migrations once against your shared PostgreSQL instance — both the Vercel and Railway services connect to the same database:
+
+        ```bash
+        psql $DATABASE_URL -f db/migrations/001_create_players.sql
+        psql $DATABASE_URL -f db/migrations/002_create_profile_and_games.sql
+        psql $DATABASE_URL -f db/migrations/003_create_password_reset_tokens.sql
+        psql $DATABASE_URL -f db/migrations/004_create_friendships.sql
+        psql $DATABASE_URL -f db/migrations/005_create_player_blocks.sql
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Environment Variables
+
+The full set of environment variables supported by Spades Online:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `REDIS_URL` | Yes | — | Redis connection string |
+| `PORT` | No | `3000` | HTTP server port |
+| `WS_PORT` | No | Same as `PORT` | WebSocket server port. Defaults to sharing the HTTP server. Set to a different port to run WebSocket on a dedicated server (requires a reverse proxy to route WebSocket upgrades). |
+| `WS_URL` | No | Derived from request origin | Full WebSocket base URL (e.g. `wss://my-app.up.railway.app`). Required in split-host deployments. Injected as `window.__WS_URL__` in the served HTML. |
+| `NODE_ENV` | No | — | Environment name (`development`, `production`) |
+| `APP_URL` | No | `http://localhost:3000` | Public base URL used in verification emails and join links |
+| `EMAIL_HOST` | No | — | SMTP host. If unset, verification emails are logged to stdout |
+| `EMAIL_PORT` | No | `587` | SMTP port |
+| `EMAIL_SECURE` | No | `false` | Set `true` for TLS on port 465 |
+| `EMAIL_USER` | No | — | SMTP username |
+| `EMAIL_PASS` | No | — | SMTP password |
+| `EMAIL_FROM` | No | `noreply@spades.online` | From address for outbound email |
+| `GIT_COMMIT_SHA` | No | — | Current commit SHA (set by CI). Falls back to `VERCEL_GIT_COMMIT_SHA`, then `COMMIT_REF`, then `git rev-parse HEAD` |
+| `AUTH_RATE_LIMIT_MAX` | No | `10` | Max auth requests per window |
+| `AUTH_RATE_LIMIT_WINDOW` | No | `900` | Rate limit window in seconds (default: 15 minutes) |
+| `DEV_AUTO_VERIFY` | No | — | Skip email verification on registration. **Local dev only.** |
+
+## Rate Limiting
+
+Spades Online uses a Redis-backed fixed-window rate limiter on authentication endpoints. The limiter tracks requests per IP address using a Redis key with an automatic TTL.
+
+The defaults are configurable via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTH_RATE_LIMIT_MAX` | `10` | Maximum number of requests allowed per window |
+| `AUTH_RATE_LIMIT_WINDOW` | `900` | Window duration in seconds (900 s = 15 minutes) |
+
+When a request exceeds the limit, the server returns HTTP `429` with the response body:
+
+```json
+{ "error": "Too many requests. Please try again later." }
+```
+
+The following rate-limit headers are included on every auth response:
+
+| Header | Description |
+|---|---|
+| `X-RateLimit-Limit` | Maximum requests allowed in the window |
+| `X-RateLimit-Remaining` | Requests remaining in the current window |
+| `X-RateLimit-Reset` | Unix timestamp when the window resets |
+
+<Note>
+  If Redis is not configured (`REDIS_URL` is not set), the rate limiter middleware is bypassed and all requests are passed through without limiting. Ensure Redis is available in all production environments.
+</Note>
+
+## Health Check
+
+The server exposes a lightweight build-info endpoint that can be used as a health check or version probe:
+
+```
+GET /api/build-info
+```
+
+**Response:**
+
+```json
+{ "commitShort": "a1b2c3d" }
+```
+
+Returns the short (7-character) git commit SHA of the running server. If `GIT_COMMIT_SHA` is not set and the SHA cannot be resolved from the environment or `git rev-parse HEAD`, the response is `{ "commitShort": null }`.
+
+Use this endpoint in your load balancer, uptime monitor, or deployment pipeline to confirm the correct version is running after a deploy.

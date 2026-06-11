@@ -1,0 +1,148 @@
+---
+title: "Spades Online: Self-Hosted Multiplayer Card Game Server"
+sidebarTitle: "Introduction"
+description: "Spades Online is a production-ready Node.js server for real-time 4-player Spades. Ships with a WebSocket engine, Redis presence, PostgreSQL persistence, and a browser client."
+---
+
+Spades Online is a production-ready, self-hosted multiplayer card game server built on Node.js and Express. It ships with a real-time WebSocket engine, a Redis-backed lobby and presence system, a PostgreSQL persistence layer, and a fully functional Vanilla JS single-page web client — everything you need to run a complete 4-player Spades game platform. It is aimed at developers who want to self-host the game, integrate the API into their own frontend, or extend the platform with new features.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card icon="bolt" title="Real-Time WebSocket Gameplay">
+    Every game action — bids, card plays, trick completions, and score updates — is pushed to all connected clients instantly over WebSocket. The server shares the HTTP port by default and can be split to a dedicated port via `WS_PORT`.
+  </Card>
+  <Card icon="table" title="Table Lobby System">
+    Players create and browse tables with configurable visibility (`public`, `friends-only`, `private`) and join policies (`open`, `friends-only`, `invite-only`). The lobby updates in real time via Redis pub/sub so clients always see live seat counts and table status.
+  </Card>
+  <Card icon="users" title="Friends & Social System">
+    Full friend request, accept, decline, and removal flow backed by PostgreSQL. Friends see each other's presence status (`online`, `in-game`, `offline`) and can navigate directly to a friend's table. Player blocking is also supported.
+  </Card>
+  <Card icon="robot" title="Bot Players">
+    The table host can fill any empty seat with a bot at any time. Bots bid by counting spades in hand and play a random legal card. Bot turns are processed server-side automatically so human players never wait on a bot action.
+  </Card>
+  <Card icon="shield-check" title="Anti-Cheat Validation">
+    Every bid and card play is validated server-side before being accepted. The server enforces turn order, suit-following rules, spades-breaking rules, and Blind Nil eligibility — clients cannot submit illegal moves.
+  </Card>
+  <Card icon="server" title="Redis Pub/Sub Scalability">
+    Lobby events, personal notifications (friend requests, invites, kicks), and presence updates all route through Redis pub/sub channels. This means multiple server instances can share a single Redis and WebSocket events reach the correct players regardless of which instance handles the request.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Server | Node.js 18+ · Express · ES Modules (no build step) |
+| Real-time | WebSocket (`ws` library) — shares HTTP server by default; configurable via `WS_PORT` |
+| Session / Presence / Pub-Sub | Redis |
+| Persistent storage | PostgreSQL |
+| Web client | Vanilla JS SPA (served as static files by Express) |
+
+## Project Structure
+
+The repository is organized into four top-level directories: `server/` for all backend logic, `client/` for the browser SPA, `db/` for SQL migrations, and `test/` for unit and integration test suites. The server itself is further split into focused modules for authentication, social features, game state, the lobby, WebSocket handling, and anti-cheat validation.
+
+<Accordion title="Full directory layout">
+```
+client/
+  web/
+    index.html        — SPA entry point (served at /)
+    src/
+      main.js         — App entry; registers routes and starts the router
+      router.js       — Hash-based SPA router
+      validation.js   — Pure form-validation helpers (shared with unit tests)
+      api.js          — Fetch wrappers for all API endpoints
+      buildIndicator.js — Build commit indicator UI module
+      redirectIfSeated.js — Redirects seated players back to their table
+      friendsPanel.js — Friends list panel with presence badges
+      infoPanel.js    — Collapsible tabbed Info Panel (Friends + Game History tabs)
+      invitePanel.js  — Waiting-room Invite panel helpers
+      inviteNotification.js — In-app invite notification helpers
+      seatUtils.js    — Seat orientation helpers
+      hand.js         — Card hand rendering helpers
+      trickHold.js    — Trick animation / hold logic
+      inputBlock.js   — Input blocking during async actions
+      endOfHandSummary.js — End-of-hand summary rendering
+      icons.js        — SVG icon constants
+      screens/
+        login.js          — Sign-in screen
+        register.js       — Registration screen
+        forgotPassword.js — Forgot password request screen
+        resetPassword.js  — Reset password form and landing screens
+        lobby.js          — Lobby (main menu after login)
+        createTable.js    — Create table screen
+        joinTable.js      — Join table / seat picker screen
+        game.js           — In-game screen (bidding, card play, end-of-hand)
+server/
+  app.js          — Express entry point (also serves client/web as static)
+  server.js       — All API route handlers
+  db.js           — Shared PostgreSQL pool
+  redis.js        — Shared Redis client
+  presence.js     — Redis presence state machine (online / playing / disconnect cleanup)
+  auth/
+    registration.js  — Registration and email-verification logic
+    login.js         — Login and credential validation
+    session.js       — Session creation, lookup, and deletion
+    passwordReset.js — Forgot/reset password logic
+    email.js         — Email builders and senders (verification + password reset)
+  social/
+    profile.js      — Player profile data access
+    block.js        — Player blocking and block-check logic
+  game/
+    state.js        — Game state machine (create, bid, play, score)
+    bid.js          — Bidding logic and partnership bid resolution
+    deck.js         — Deck creation and dealing
+    trick.js        — Trick resolution
+    score.js        — Scoring, bag counting, win detection
+    bot.js          — Bot player logic (bid and card selection)
+  lobby/
+    table.js        — Table creation, seat management, lobby index
+  ws/
+    index.js        — WebSocket server (auth, rooms, heartbeat, broadcast helpers)
+  anticheat/
+    validate.js     — Server-side move validation (turn, card legality)
+  middleware/
+    rateLimiter.js  — Redis-backed per-IP rate limiter
+db/
+  migrations/
+    001_create_players.sql
+    002_create_profile_and_games.sql
+    003_create_password_reset_tokens.sql
+    004_create_friendships.sql
+    005_create_player_blocks.sql
+test/
+  unit/
+    auth/           — Pure logic tests (no DB required)
+    web/            — Web client unit tests (validation, API client)
+    game/           — Game engine unit tests (scoring, bidding, tricks, bags)
+    anticheat/      — Move validation unit tests
+    lobby/          — Lobby and table management unit tests
+    middleware/     — Rate limiter unit tests
+  integration/
+    auth/           — Auth API route tests (requires DATABASE_URL)
+    social/         — Profile and friends API route tests (requires DATABASE_URL)
+    game/           — Game API route tests (requires DATABASE_URL + Redis)
+  ws/               — WebSocket event flow tests
+docs/
+  spades_prd.md   — Product requirements (source of truth for all rules)
+  TASKS.md        — Task checklist
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card icon="rocket" title="Quickstart" href="/quickstart">
+    Clone the repo, run migrations, and have a local game server running in five steps.
+  </Card>
+  <Card icon="sliders" title="Configuration" href="/environment-variables">
+    Full reference for every environment variable the server reads at startup.
+  </Card>
+  <Card icon="sitemap" title="Architecture" href="/architecture/overview">
+    Deep dive into how the WebSocket engine, Redis pub/sub, and game state machine fit together.
+  </Card>
+  <Card icon="code" title="API Reference" href="/api/auth/register">
+    Complete HTTP and WebSocket API documentation for all endpoints.
+  </Card>
+</CardGroup>

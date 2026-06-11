@@ -1,0 +1,134 @@
+---
+title: "Authenticate with Spades Online: Login and Logout"
+sidebarTitle: "Login"
+description: "POST /api/auth/login authenticates a player and returns a session token. POST /api/auth/logout invalidates the session. Session tokens are passed as x-session-id headers."
+---
+
+Authentication in Spades Online is session-based. After a successful login, the server creates a session in Redis and returns a `sessionId` UUID. Every subsequent authenticated request must include this token in the `x-session-id` header alongside the `x-player-id` header. Sessions are stored in Redis with a 7-day TTL and are immediately invalidated on logout.
+
+---
+
+## POST /api/auth/login
+
+Validates the player's credentials and, on success, creates a new session in Redis.
+
+| | |
+|---|---|
+| **Method** | `POST` |
+| **Path** | `/api/auth/login` |
+| **Auth required** | None |
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address used to register the account. Compared case-insensitively.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password. Validated against the stored bcrypt hash.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "alice@example.com", "password": "hunter2abc"}'
+```
+
+### Response codes
+
+| Status | Meaning |
+|---|---|
+| `200` | Login successful. Session created. |
+| `400` | Missing or invalid fields. |
+| `401` | Email address not found or password is incorrect. |
+| `403` | Credentials are valid but the account email has not been verified yet. |
+
+### 200 response body
+
+<ResponseField name="sessionId" type="string">
+  The UUID session token. Include this as the `x-session-id` header on every authenticated request.
+</ResponseField>
+
+<ResponseField name="playerId" type="string">
+  The UUID of the authenticated player. Include this as the `x-player-id` header on every authenticated request.
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  The player's display name.
+</ResponseField>
+
+```json
+{
+  "sessionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "username": "alice"
+}
+```
+
+<Note>
+  The web client stores `sessionId`, `playerId`, and `username` in `sessionStorage` immediately after a successful login. On page reload, the values are read back from `sessionStorage` so the player remains authenticated without logging in again.
+</Note>
+
+---
+
+## POST /api/auth/logout
+
+Deletes the current session from Redis. The `sessionId` becomes immediately invalid — any subsequent request using the old token will be rejected with `401`.
+
+| | |
+|---|---|
+| **Method** | `POST` |
+| **Path** | `/api/auth/logout` |
+| **Auth required** | `x-session-id` header |
+
+### Required headers
+
+| Header | Value |
+|---|---|
+| `x-session-id` | The session token UUID returned by login. |
+
+### Example request
+
+```bash
+curl -X POST http://localhost:3000/api/auth/logout \
+  -H 'x-session-id: f47ac10b-58cc-4372-a567-0e02b2c3d479'
+```
+
+### Response codes
+
+| Status | Meaning |
+|---|---|
+| `200` | Session invalidated. Body: `{ message }`. |
+
+---
+
+## Passing auth headers
+
+All authenticated endpoints require **both** `x-session-id` and `x-player-id` headers. The server validates the session token in Redis and verifies that the `playerId` in the session matches the supplied `x-player-id` header before processing the request.
+
+```bash
+curl http://localhost:3000/api/friends \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>'
+```
+
+Both values are returned by `POST /api/auth/login` and should be persisted together for the duration of the session.
+
+---
+
+## Rate limiting
+
+<Note>
+  Auth endpoints are protected by a Redis-backed fixed-window rate limiter. By default, each IP address is limited to **10 requests per 15 minutes**. Exceeding the limit returns `429 Too Many Requests` with a `Retry-After` header indicating how many seconds to wait.
+
+  The limits are configurable via environment variables:
+
+  | Variable | Default | Description |
+  |---|---|---|
+  | `AUTH_RATE_LIMIT_MAX` | `10` | Maximum number of requests allowed per window per IP. |
+  | `AUTH_RATE_LIMIT_WINDOW` | `900` | Rate limit window length in seconds (900 s = 15 minutes). |
+
+  Every rate-limited response also includes `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
+</Note>

@@ -1,0 +1,161 @@
+---
+title: "WebSocket Server: Rooms, Pub/Sub, and Heartbeat"
+sidebarTitle: "WebSocket"
+description: "How the Spades Online WebSocket server authenticates connections, manages table rooms and the lobby channel, fans out events via Redis pub/sub, and handles heartbeats."
+---
+
+The WebSocket server, implemented in `server/ws/index.js` using the `ws` library, authenticates every upgrade request before allowing a connection. Once connected, clients join per-table rooms (`table:{tableId}`) or the global lobby channel (`lobby`) to receive real-time events. Events are fanned out through Redis pub/sub, so any number of server instances can participate in the same game without sticky sessions — each instance maintains a dedicated Redis subscriber connection and forwards incoming channel messages to its local WebSocket clients.
+
+## Connection & authentication
+
+Every WebSocket upgrade request must carry a valid session token. The server reads the token from the `x-session-id` request header (for server-to-server and Node.js `ws` clients) or from the `sessionId` URL query parameter (for browser clients, which cannot set custom headers on the WebSocket handshake). If neither is present, or if the session is not found in Redis, the server responds with `HTTP 401` and destroys the socket immediately — no unauthenticated connections are accepted.
+
+```
+GET ws://localhost:3000/
+x-session-id: <your-session-id>
+```
+
+Or, for browser clients that cannot set headers:
+
+```
+GET ws://localhost:3000/?sessionId=<your-session-id>
+```
+
+On a successful upgrade, the server stores `session.playerId` on the socket as `ws._playerId`, sets the player's presence to online (or reconciles it to `playing` if the player is mid-game on reconnect), and subscribes the connection to the player's personal notification channel.
+
+## Rooms
+
+Spades Online uses two room types. Clients subscribe and unsubscribe by sending JSON messages to the server.
+
+**Table rooms — `table:{tableId}`**
+
+A client joins a table room by sending a `JOIN` message. The server first verifies that the player is either seated at the table or listed as an observer in Redis; if neither condition is met, a `JOIN_DENIED` message is returned and the subscription is refused. Observer connections are flagged with `ws._isObserver = true`.
+
+```json
+{ "type": "JOIN", "payload": { "tableId": "<uuid>" } }
+```
+
+The server acknowledges with `{ "type": "JOINED", "payload": { "tableId": "<uuid>" } }`. To leave, send:
+
+```json
+{ "type": "LEAVE", "payload": { "tableId": "<uuid>" } }
+```
+
+Acknowledged with `{ "type": "LEFT", "payload": { "tableId": "<uuid>" } }`.
+
+**Lobby channel — `lobby`**
+
+The lobby channel carries table lifecycle events (`TABLE_CREATED`, `TABLE_UPDATED`, `TABLE_REMOVED`) for public tables. Clients subscribe by sending `JOIN_LOBBY` (no payload required) and unsubscribe with `LEAVE_LOBBY`.
+
+```json
+{ "type": "JOIN_LOBBY", "payload": {} }
+```
+
+Acknowledged with `{ "type": "JOINED_LOBBY", "payload": {} }`.
+
+## Redis pub/sub fan-out
+
+Each room maps one-to-one to a Redis pub/sub channel: table rooms use the channel `table:{tableId}`, the lobby uses the channel `lobby`, and personal notification channels use `player:{playerId}:notify`. A **dedicated subscriber connection** is created by duplicating the shared Redis client (`redis.duplicate()`) — this is required because a Redis client in pub/sub mode cannot issue regular commands on the same connection.
+
+When the first local WebSocket client joins a room, the server calls `subscriber.subscribe(channelKey, onChannelMessage)`. When the last local client leaves, `subscriber.unsubscribe(channelKey)` is called. This means channels are only active on instances that actually have subscribers, keeping Redis traffic proportional to real load.
+
+When server-side code calls `wss.broadcast(tableId, type, payload)`, the event JSON is published to `table:{tableId}`. Every server instance subscribed to that channel receives the message via `onChannelMessage` and forwards it to all open WebSocket connections in the matching local room. The same pattern applies to `wss.broadcastLobby` (channel: `lobby`) and `wss.notifyPlayer` (channel: `player:{playerId}:notify`).
+
+<Note>
+  Without Redis (`REDIS_URL` unset), broadcast falls back to direct local delivery. This is suitable for single-instance development but will not fan out across multiple instances.
+</Note>
+
+## Observer filtering
+
+Connections that joined a table as spectators (`ws._isObserver = true`) receive all game events **except** the three that contain private hand data:
+
+| Blocked event type | Reason |
+|---|---|
+| `HAND_DEALT` | Contains the player's private card hand |
+| `HAND_REVEALED` | Contains a Blind Nil player's revealed hand |
+| `BLIND_NIL_EXCHANGE_PROMPT` | Contains exchange direction and card count for a specific player |
+
+The filter is applied in `onChannelMessage` before forwarding each Redis pub/sub message to local clients. For local (non-Redis) delivery, the same check runs inside `wss.broadcast`.
+
+<Warning>
+  `HAND_DEALT` is never broadcast to the table room at all — it is delivered individually to each player via `wss.sendToPlayer` so that each player only ever receives their own cards. Observer filtering is a second line of defence for the rare case where an observer connection is in the room.
+</Warning>
+
+## Personal notification channel
+
+On connect, every authenticated WebSocket connection is automatically subscribed to the Redis channel `player:{playerId}:notify`. No client action is required. This channel delivers social and administrative events directly to the target player across all server instances:
+
+| Event type | Trigger |
+|---|---|
+| `FRIEND_REQUEST_RECEIVED` | Another player sent this player a friend request |
+| `FRIEND_REQUEST_ACCEPTED` | This player's friend request was accepted |
+| `INVITE_RECEIVED` | A table host sent this player an in-app invite |
+| `INVITE_DECLINED` | An invitee declined an invite sent by this player (host) |
+| `KICKED_FROM_TABLE` | This player was kicked from a table by the host |
+| `TABLE_CREATED` | A friends-only table was created (or visibility changed to `friends-only`) by a friend |
+| `TABLE_REMOVED` | A friends-only table was removed or visibility changed away from `friends-only` |
+
+Server-side code sends to any online player using:
+
+```js
+wss.notifyPlayer(playerId, type, payload)
+```
+
+When Redis is configured, this publishes to `player:{playerId}:notify`, reaching the player on whichever server instance they are currently connected to. Without Redis, it falls back to `wss.sendToPlayer`, which delivers locally only.
+
+The subscription is cleaned up automatically on disconnect: when the last connection for a `playerId` closes, the personal channel is unsubscribed and removed from the room map.
+
+## Heartbeat
+
+The server sends a WebSocket **ping** frame to every connected client every **30 seconds**. Standard WebSocket implementations (browsers, the `ws` library) respond automatically with a pong frame — no application-level handling is required.
+
+If no pong is received within **10 seconds** of the ping, the connection is terminated via `ws.terminate()`. The exact values come from the `pingIntervalMs` (default `30_000`) and `pongTimeoutMs` (default `10_000`) options passed to `createWsServer`.
+
+## Helper methods
+
+<Accordion title="wss.broadcast(tableId, type, payload)">
+  Sends an event to all WebSocket clients subscribed to the table room `table:{tableId}`.
+
+  When Redis is configured, publishes `{ type, payload }` as JSON to the Redis channel `table:{tableId}`. All server instances subscribed to that channel forward the message to their local clients in the room — observer connections are filtered for `HAND_DEALT`, `HAND_REVEALED`, and `BLIND_NIL_EXCHANGE_PROMPT`. Without Redis, delivers directly to local room members.
+
+  ```js
+  wss.broadcast(tableId, 'CARD_PLAYED', { seat: 'north', card: 'AS', ... })
+  ```
+</Accordion>
+
+<Accordion title="wss.broadcastLobby(type, payload)">
+  Sends an event to all WebSocket clients subscribed to the global lobby channel.
+
+  When Redis is configured, publishes to the Redis `lobby` channel so all server instances deliver the event to their local lobby subscribers. Without Redis, delivers directly to local lobby room members.
+
+  ```js
+  wss.broadcastLobby('TABLE_CREATED', { tableId, name, host, seats, visibility })
+  ```
+
+  <Note>
+    Only public tables use `broadcastLobby`. Friends-only table events are sent via `wss.notifyPlayer` to each of the host's friends individually. Private tables produce no lobby broadcast at all.
+  </Note>
+</Accordion>
+
+<Accordion title="wss.sendToPlayer(playerId, type, payload)">
+  Sends an event to all active WebSocket connections for a specific player on **this server instance only**. Does not publish to Redis. Used for events that must target exactly one player — for example, delivering `HAND_DEALT` with that player's private cards.
+
+  ```js
+  wss.sendToPlayer(playerId, 'HAND_DEALT', { dealer, biddingOrder, myHand, blindNilEligible })
+  ```
+</Accordion>
+
+<Accordion title="wss.notifyPlayer(playerId, type, payload)">
+  Sends a notification to a specific player via their personal `player:{playerId}:notify` Redis channel, reaching them on whichever server instance they are connected to. Falls back to `sendToPlayer` when Redis is not configured.
+
+  ```js
+  wss.notifyPlayer(targetPlayerId, 'INVITE_RECEIVED', {
+    inviteId,
+    tableId,
+    tableName,
+    token,
+    invitedBy: { playerId, username },
+    expiresAt,
+  })
+  ```
+</Accordion>

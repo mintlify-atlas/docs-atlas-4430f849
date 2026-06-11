@@ -1,0 +1,194 @@
+---
+title: "WebSocket Event Reference for Spades Online"
+sidebarTitle: "Events"
+description: "Complete reference for all server-sent WebSocket events: table room events, lobby events, game events, personal notification events, and observer-specific behavior."
+---
+
+The server emits all events to subscribed clients using the same JSON envelope: `{ "type": "<TYPE>", "payload": { ... } }`. Events are routed based on the room the client has joined and the table's visibility setting — clients only receive events relevant to the rooms they have explicitly subscribed to, plus personal notification events which are delivered automatically to every authenticated connection.
+
+## Connection Acknowledgement Events
+
+These events are sent in direct response to a client subscription or unsubscription message. They confirm the result of the client's action and carry no additional state.
+
+| Type | Sent in response to | Payload |
+|---|---|---|
+| `JOINED` | `JOIN` | `{ tableId }` |
+| `LEFT` | `LEAVE` | `{ tableId }` |
+| `JOIN_DENIED` | `JOIN` (rejected) | `{ tableId, reason: "not_seated" \| "table_not_found" \| "error" }` |
+| `JOINED_LOBBY` | `JOIN_LOBBY` | `{}` |
+| `LEFT_LOBBY` | `LEAVE_LOBBY` | `{}` |
+
+See [Connection — JOIN\_DENIED](/api/websocket/connection#join-denied) for a full description of the denial reasons.
+
+## Table Room Events
+
+These events are broadcast to all clients subscribed to a `table:{tableId}` room. They cover observer activity, host management actions, visibility changes, and all in-game events.
+
+<AccordionGroup>
+  <Accordion title="Observer events">
+    Emitted when a spectator-only observer joins or leaves the table. Observers arrive via a spectator link or the Friends list "Go to Table" action.
+
+    | Type | Payload |
+    |---|---|
+    | `OBSERVER_JOINED` | `{ playerId, username }` |
+    | `OBSERVER_LEFT` | `{ playerId }` |
+
+    **Example — observer joins:**
+
+    ```json
+    {
+      "type": "OBSERVER_JOINED",
+      "payload": { "playerId": "a1b2c3d4-...", "username": "carol" }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Host events">
+    Emitted when the host takes a management action that affects the table composition or configuration.
+
+    | Type | Payload | Trigger |
+    |---|---|---|
+    | `HOST_CHANGED` | `{ newHostPlayerId, newHostSeat }` | Host transferred privileges to another seated player via `POST /api/tables/:tableId/transfer-host`. |
+    | `PLAYER_KICKED` | `{ playerId, seat }` | Host kicked a seated player or observer. `seat` is `null` when the kicked player was an observer. |
+    | `TABLE_VISIBILITY_CHANGED` | `{ tableId, visibility, oldVisibility, joinPolicy }` | Host changed the table's visibility setting via `POST /api/tables/:tableId/visibility`. |
+
+    **Example — host changed:**
+
+    ```json
+    {
+      "type": "HOST_CHANGED",
+      "payload": { "newHostPlayerId": "a1b2c3d4-...", "newHostSeat": "south" }
+    }
+    ```
+
+    **Example — player kicked (seated):**
+
+    ```json
+    {
+      "type": "PLAYER_KICKED",
+      "payload": { "playerId": "a1b2c3d4-...", "seat": "east" }
+    }
+    ```
+
+    **Example — player kicked (observer):**
+
+    ```json
+    {
+      "type": "PLAYER_KICKED",
+      "payload": { "playerId": "a1b2c3d4-...", "seat": null }
+    }
+    ```
+
+    **Example — visibility changed:**
+
+    ```json
+    {
+      "type": "TABLE_VISIBILITY_CHANGED",
+      "payload": {
+        "tableId": "a1b2c3d4-...",
+        "visibility": "private",
+        "oldVisibility": "public",
+        "joinPolicy": "invite-only"
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Game events">
+    In-game events (bid placed, card played, trick complete, hand dealt, and so on) are broadcast to all clients in the table room using the standard envelope:
+
+    ```json
+    { "type": "<GAME_EVENT_NAME>", "payload": { ... } }
+    ```
+
+    <Warning>
+      **Observer filtering:** `HAND_DEALT`, `HAND_REVEALED`, and `BLIND_NIL_EXCHANGE_PROMPT` are **never delivered to observer (spectator-only) connections**. These events contain private hand data and are suppressed server-side to prevent cheating. All other game events are visible to observers. See the [Observer Filtering](#observer-filtering) section for full details.
+    </Warning>
+
+    **Reconnect events** — when a seated player's connection drops during an active game, the server broadcasts the following events to all clients in the table room:
+
+    | Type | Payload | Trigger |
+    |---|---|---|
+    | `PLAYER_DISCONNECTED` | `{ seat, reconnectWindowSeconds }` | A seated player's last connection to the table room closed unexpectedly during an active game. `reconnectWindowSeconds` is the duration of the grace period before the game stalls. |
+    | `PLAYER_RECONNECTED` | `{ seat }` | The disconnected player rejoined the table room within the reconnect window. |
+  </Accordion>
+</AccordionGroup>
+
+## Lobby Events
+
+Lobby events notify subscribers when a table's publicly visible state changes. The routing of each event depends on the table's `visibility` setting.
+
+| Type | Payload | Trigger |
+|---|---|---|
+| `TABLE_CREATED` | `{ tableId, name, host, seats, visibility }` | A new table was created. |
+| `TABLE_UPDATED` | `{ tableId, name, host, seats, status, visibility, observerCount, spectating }` | A table's state changed — a seat was taken or vacated, the game started, an observer joined, etc. |
+| `TABLE_REMOVED` | `{ tableId }` | A table was removed (terminated, all players left, or expired). |
+
+<Note>
+  **Routing by visibility:**
+
+  - **Public** tables broadcast `TABLE_CREATED`, `TABLE_UPDATED`, and `TABLE_REMOVED` on the shared `lobby` Redis pub/sub channel, which reaches all clients subscribed to the lobby channel across every server instance.
+  - **Friends-only** tables send the same events exclusively to each of the host's friends via their personal `player:{friendId}:notify` notification channels (using `wss.notifyPlayer`). These events never appear on the public lobby channel.
+  - **Private** tables produce no broadcast at all — neither lobby subscribers nor friends receive visibility events for private tables.
+
+  When the host changes a table's visibility, the server fires the appropriate transition events: leaving `public` sends `TABLE_REMOVED` to the lobby, entering `public` sends `TABLE_CREATED` to the lobby, leaving `friends-only` sends `TABLE_REMOVED` to each friend's notification channel, and entering `friends-only` sends `TABLE_CREATED` to each friend's channel. A `TABLE_VISIBILITY_CHANGED` event is also broadcast to the table room itself.
+</Note>
+
+## Personal Notification Events
+
+These events are delivered to a player's personal `player:{playerId}:notify` Redis pub/sub channel. Every authenticated connection is automatically subscribed to its own channel — no client action is needed. Events on this channel are delivered to all of the player's active connections across every server instance.
+
+| Type | Payload | Trigger |
+|---|---|---|
+| `FRIEND_REQUEST_RECEIVED` | `{ fromPlayerId, fromUsername }` | Another player sent this player a friend request. |
+| `FRIEND_REQUEST_ACCEPTED` | `{ fromPlayerId, fromUsername }` | This player's outgoing friend request was accepted. |
+| `INVITE_RECEIVED` | `{ inviteId, tableId, tableName, token, invitedBy: { playerId, username }, expiresAt }` | A table host sent this player an in-app invite. `token` is a single-use join link that bypasses the table's join policy; it expires at `expiresAt` (10 minutes after issue). `inviteId` is used by the decline endpoint. |
+| `INVITE_DECLINED` | `{ inviteId, tableId, declinedBy: { playerId, username } }` | An invitee declined a pending invite this player sent. Delivered to the host's notification channel. |
+| `KICKED_FROM_TABLE` | `{ tableId }` | This player was kicked from a table by the host. |
+
+**Example — invite received:**
+
+```json
+{
+  "type": "INVITE_RECEIVED",
+  "payload": {
+    "inviteId": "f7a2...",
+    "tableId": "c3d4...",
+    "tableName": "Alice's Table",
+    "token": "e9b1...",
+    "invitedBy": { "playerId": "a1b2...", "username": "alice" },
+    "expiresAt": "2026-06-01T12:10:00.000Z"
+  }
+}
+```
+
+**Example — friend request received:**
+
+```json
+{
+  "type": "FRIEND_REQUEST_RECEIVED",
+  "payload": { "fromPlayerId": "a1b2c3d4-...", "fromUsername": "bob" }
+}
+```
+
+## Observer Filtering
+
+<Warning>
+  The following game events are **never sent to observer (spectator-only) connections**, regardless of which room they are subscribed to:
+
+  | Filtered event | Why |
+  |---|---|
+  | `HAND_DEALT` | Contains the private cards dealt to each player. |
+  | `HAND_REVEALED` | Contains a player's hand after a Blind Nil reveal. |
+  | `BLIND_NIL_EXCHANGE_PROMPT` | Signals the exchange phase and may reference hand contents. |
+
+  The server filters these events at the delivery layer (`onChannelMessage` in `ws/index.js`) so suppression is enforced regardless of the broadcast path used. All other game and table events — including `PLAYER_KICKED`, `HOST_CHANGED`, `OBSERVER_JOINED`, trick results, bid summaries, and score updates — are visible to observers.
+</Warning>
+
+A connection is marked as an observer (`ws._isObserver = true`) when the server's `JOIN` handler confirms that the authenticated player appears in the table's `observers` list but not in any seat. Observer status is fixed for the lifetime of the connection — it does not change if the player subsequently takes a seat.
+
+## Redis Pub/Sub Routing
+
+<Note>
+  In multi-instance deployments every broadcast goes through Redis pub/sub. When `wss.broadcast(tableId, type, payload)` is called on instance A, it publishes to the Redis channel `table:{tableId}`. Every server instance that has local WebSocket clients subscribed to that room is listening on the same channel and will forward the message to those clients. This means a client connected to instance A will receive events broadcast by instance B as long as both are subscribed to the same Redis channel. The same fan-out applies to `broadcastLobby` (channel: `lobby`) and `notifyPlayer` (channel: `player:{playerId}:notify`).
+</Note>

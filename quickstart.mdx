@@ -1,47 +1,129 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Spades Online in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Install, configure, and run the Spades Online server locally with PostgreSQL and Redis. From zero to a working game in five steps."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide walks you through cloning the Spades Online repository, configuring your environment, running the database migrations, and starting the server locally. By the end you will have a fully functional game server running on your machine with the built-in web client accessible in your browser — no build step required.
 
 ## Prerequisites
 
-Before you begin, you must have:
+<Note>
+  Before you begin, make sure you have the following installed and running on your machine:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+  - **Node.js 18+** — the server uses ES Modules and native `node:crypto`
+  - **PostgreSQL** — any recent version; used for player accounts, game history, and social data
+  - **Redis** — any recent version; used for sessions, lobby state, presence, and pub/sub
+</Note>
 
-## Get started
+## Setup
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone and install">
+    Clone the repository and install dependencies. There is no build step — the server runs directly from source using Node.js ES Modules.
 
     ```bash
-    npm install your-package
+    git clone https://github.com/Antonelli-Tech-Solutions/spades.git
+    cd spades
+    npm install
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Start PostgreSQL and Redis">
+    Make sure both services are running before you proceed. If you installed them via a package manager or Docker, start them with your usual commands. Your connection strings will look something like these:
+
+    ```
+    PostgreSQL: postgresql://user:password@localhost:5432/spades
+    Redis:      redis://localhost:6379
+    ```
+
+    Create the `spades` database in PostgreSQL if it does not already exist:
 
     ```bash
-    your-cli init
+    createdb spades
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Set environment variables">
+    The server reads all configuration from environment variables. Only two are required to start:
 
     ```bash
-    your-cli start
+    export DATABASE_URL="postgresql://user:password@localhost:5432/spades"
+    export REDIS_URL="redis://localhost:6379"
+    ```
+
+    Replace `user` and `password` with your PostgreSQL credentials. See the [Environment Variables](/environment-variables) reference for the full list of optional settings.
+  </Step>
+
+  <Step title="Run database migrations">
+    Apply all five migrations in order. Each file is idempotent (`CREATE TABLE IF NOT EXISTS`) so it is safe to re-run them.
+
+    ```bash
+    psql $DATABASE_URL -f db/migrations/001_create_players.sql
+    psql $DATABASE_URL -f db/migrations/002_create_profile_and_games.sql
+    psql $DATABASE_URL -f db/migrations/003_create_password_reset_tokens.sql
+    psql $DATABASE_URL -f db/migrations/004_create_friendships.sql
+    psql $DATABASE_URL -f db/migrations/005_create_player_blocks.sql
+    ```
+  </Step>
+
+  <Step title="Start the server">
+    Start the server with:
+
+    ```bash
+    npm start
+    ```
+
+    The server listens on port `3000` by default. Open [http://localhost:3000](http://localhost:3000) in your browser to access the web client. You should see the Spades Online sign-in screen.
+
+    ```
+    Spades Online server listening on port 3000
+    WebSocket server sharing HTTP server on port 3000
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Development Shortcuts
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+### Skip email verification
+
+If you do not have an SMTP server configured, verifying accounts via email is not possible. Set `DEV_AUTO_VERIFY=true` when starting the server to mark new registrations as verified immediately — no email is sent and you can log in straight away:
+
+```bash
+DEV_AUTO_VERIFY=true npm start
+```
+
+<Warning>
+  `DEV_AUTO_VERIFY=true` bypasses all email verification. **Never set this variable in a production environment.** It is a local development convenience only.
+</Warning>
+
+### Bot players
+
+You can fill any empty seat at a table with a bot player to test gameplay without needing four human players. The table host sends a request specifying the target seat:
+
+```bash
+POST /api/tables/:tableId/add-bot
+Headers: x-session-id, x-player-id
+Body: { "seat": "north" }   # valid values: north, east, south, west
+```
+
+Bot players bid by counting the spades in their hand and play a random legal card. Their turns are processed automatically server-side — human players just poll `GET /api/tables/:tableId/state` as normal. Once all four seats are filled (by any mix of humans and bots), the game starts automatically.
+
+## Running Tests
+
+```bash
+npm test
+```
+
+Unit tests cover the game engine, anti-cheat validation, lobby logic, and middleware, and run without any external services. Integration tests require `DATABASE_URL` to be set and will be skipped if it is absent.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card icon="sliders" title="Environment Variables" href="/environment-variables">
+    Configure SMTP email, custom ports, rate limiting, and more.
+  </Card>
+  <Card icon="sitemap" title="Architecture" href="/architecture/overview">
+    Understand how the WebSocket engine, Redis pub/sub, and game state machine work together.
+  </Card>
+</CardGroup>

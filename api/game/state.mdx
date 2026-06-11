@@ -1,0 +1,271 @@
+---
+title: "GET /api/tables/:tableId/state — Game State Endpoint"
+sidebarTitle: "Game State"
+description: "Retrieve the current game state filtered for the authenticated player. Returns hand, bids, tricks, scores, and valid plays when it is the player's turn."
+---
+
+The state endpoint returns a player-specific view of the game. Cards belonging to other players' hands are never included in any response — the server filters the full game state before sending it to each client. Spectators (observers) receive a public view with `status: "spectating"` that includes seats, scores, bids, and phase information, but never `myHand` or any other player's hand data.
+
+## GET /api/tables/:tableId/state
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+```bash
+curl http://localhost:3000/api/tables/<tableId>/state \
+  -H 'x-session-id: <sessionId>' \
+  -H 'x-player-id: <playerId>'
+```
+
+### Response codes
+
+| Status | Meaning |
+|--------|---------|
+| `200`  | Game state returned successfully. Body varies by phase — see Response variants below. |
+| `401`  | Missing or invalid session. |
+| `403`  | Player is not seated at or observing this table. |
+| `404`  | Table not found. |
+
+---
+
+## Response variants
+
+<Tabs>
+  <Tab title="Waiting">
+    Returned before the game starts (fewer than 4 seats filled).
+
+    ```json
+    {
+      "status": "waiting",
+      "seats": {
+        "north": { "playerId": "uuid", "username": "alice", "isBot": false },
+        "east":  null,
+        "south": { "playerId": "uuid", "username": "bob",   "isBot": false },
+        "west":  null
+      },
+      "isHost": true,
+      "hostSeat": "north"
+    }
+    ```
+
+    <ResponseField name="status" type="string" required>
+      Always `"waiting"` when the game has not yet started.
+    </ResponseField>
+
+    <ResponseField name="seats" type="object" required>
+      Object keyed by seat name (`north`, `east`, `south`, `west`). Each value is either `null` (empty seat) or an object with `playerId`, `username`, and `isBot`.
+    </ResponseField>
+
+    <ResponseField name="isHost" type="boolean" required>
+      Whether the requesting player is the table host.
+    </ResponseField>
+
+    <ResponseField name="hostSeat" type="string" required>
+      The seat occupied by the host (e.g. `"north"`).
+    </ResponseField>
+  </Tab>
+
+  <Tab title="Bidding">
+    Returned during the bidding phase. Blind Nil eligible players who have not yet called `reveal-hand` will have `myHand` omitted and `blindNilEligible: true`.
+
+    ```json
+    {
+      "phase": "bidding",
+      "handNumber": 1,
+      "dealerSeat": "north",
+      "myHand": ["AS", "KS", "QS", "JS", "TS", "9H", "8H", "7D", "6D", "5C", "4C", "3C", "2C"],
+      "bids": {
+        "north": null,
+        "east":  3,
+        "south": null,
+        "west":  null
+      },
+      "currentBidderSeat": "south",
+      "blindNilEligible": false,
+      "scores": { "ns": 0, "ew": 0 },
+      "bags":   { "ns": 0, "ew": 0 }
+    }
+    ```
+
+    <ResponseField name="phase" type="string" required>
+      Always `"bidding"`.
+    </ResponseField>
+
+    <ResponseField name="handNumber" type="integer" required>
+      The current hand number, starting at `1`.
+    </ResponseField>
+
+    <ResponseField name="dealerSeat" type="string" required>
+      Seat of the current dealer. Bidding begins with the player to the dealer's left.
+    </ResponseField>
+
+    <ResponseField name="myHand" type="array">
+      The requesting player's cards as an array of card strings. Omitted when the player is eligible for Blind Nil and has not yet called `reveal-hand`.
+    </ResponseField>
+
+    <ResponseField name="bids" type="object" required>
+      Object keyed by seat. `null` means the player has not yet bid. `0` = Nil, `-1` = Blind Nil, `1`–`13` = regular bid.
+    </ResponseField>
+
+    <ResponseField name="currentBidderSeat" type="string" required>
+      The seat whose turn it is to bid.
+    </ResponseField>
+
+    <ResponseField name="blindNilEligible" type="boolean" required>
+      `true` when the requesting player's team is at least 100 points behind and the player has not yet bid. When `true`, `myHand` is withheld until the player calls `reveal-hand` or bids Blind Nil.
+    </ResponseField>
+
+    <ResponseField name="scores" type="object" required>
+      Cumulative scores entering this hand: `{ ns: number, ew: number }`.
+    </ResponseField>
+
+    <ResponseField name="bags" type="object" required>
+      Accumulated bags entering this hand: `{ ns: number, ew: number }`.
+    </ResponseField>
+  </Tab>
+
+  <Tab title="Playing">
+    Returned during the playing phase. Includes the current trick in progress, completed trick counts, and — when it is the requesting player's turn — the `validCards` array.
+
+    ```json
+    {
+      "phase": "playing",
+      "handNumber": 1,
+      "dealerSeat": "north",
+      "myHand": ["AS", "KS", "QH", "JH", "TD", "9D", "8C"],
+      "bids": {
+        "north": 3,
+        "east":  2,
+        "south": 4,
+        "west":  3
+      },
+      "teamBids": { "ns": 4, "ew": 3 },
+      "tricksWon": { "north": 1, "east": 0, "south": 2, "west": 1 },
+      "currentTrick": [
+        { "seat": "east",  "card": "7H" },
+        { "seat": "south", "card": "JH" }
+      ],
+      "currentPlayerSeat": "west",
+      "leadSeat": "east",
+      "spadesbroken": false,
+      "isFirstTrick": false,
+      "scores": { "ns": 0, "ew": 0 },
+      "bags":   { "ns": 0, "ew": 0 },
+      "validCards": ["QH"]
+    }
+    ```
+
+    <ResponseField name="phase" type="string" required>
+      Always `"playing"`.
+    </ResponseField>
+
+    <ResponseField name="myHand" type="array" required>
+      The requesting player's remaining cards as card strings.
+    </ResponseField>
+
+    <ResponseField name="bids" type="object" required>
+      Final bids for all four seats.
+    </ResponseField>
+
+    <ResponseField name="teamBids" type="object" required>
+      Effective team bid for each partnership: `{ ns: number | null, ew: number | null }`. `null` when both partners bid Nil (double Nil — no team target).
+    </ResponseField>
+
+    <ResponseField name="tricksWon" type="object" required>
+      Number of tricks taken so far this hand, keyed by seat.
+    </ResponseField>
+
+    <ResponseField name="currentTrick" type="array" required>
+      Cards played in the current (incomplete) trick, in play order. Each element is `{ seat: string, card: string }`.
+    </ResponseField>
+
+    <ResponseField name="currentPlayerSeat" type="string" required>
+      The seat whose turn it is to play.
+    </ResponseField>
+
+    <ResponseField name="spadesbroken" type="boolean" required>
+      Whether Spades have been broken this hand (i.e. a Spade has been played while unable to follow suit on a non-first trick).
+    </ResponseField>
+
+    <ResponseField name="scores" type="object" required>
+      Cumulative scores entering this hand: `{ ns: number, ew: number }`.
+    </ResponseField>
+
+    <ResponseField name="bags" type="object" required>
+      Accumulated bags entering this hand: `{ ns: number, ew: number }`.
+    </ResponseField>
+
+    <ResponseField name="validCards" type="array">
+      Array of legal card strings for the requesting player to play. Only present when `currentPlayerSeat` matches the requesting player's seat. See the [validCards field](#validcards-field) section below.
+    </ResponseField>
+  </Tab>
+
+  <Tab title="Spectator">
+    Returned for observers. Never includes `myHand` or any player's hand. The `status` field is set to `"spectating"`.
+
+    ```json
+    {
+      "status": "spectating",
+      "phase": "playing",
+      "seats": {
+        "north": { "playerId": "uuid", "username": "alice", "isBot": false },
+        "east":  { "playerId": "uuid", "username": "bob",   "isBot": false },
+        "south": { "playerId": "uuid", "username": "carol", "isBot": false },
+        "west":  { "playerId": "uuid", "username": "dave",  "isBot": false }
+      },
+      "scores":       { "ns": 120, "ew": 90 },
+      "bags":         { "ns": 2,   "ew": 1 },
+      "bids":         { "north": 3, "east": 2, "south": 4, "west": 3 },
+      "tricksWon":    { "north": 2, "east": 1, "south": 3, "west": 2 },
+      "currentTrick": [],
+      "currentPlayerSeat": "north",
+      "spadesbroken": true,
+      "handNumber":   2
+    }
+    ```
+
+    <ResponseField name="status" type="string" required>
+      Always `"spectating"` for observer connections.
+    </ResponseField>
+
+    <ResponseField name="phase" type="string" required>
+      Current game phase: `"bidding"`, `"playing"`, `"blind_nil_exchange"`, or `"game_over"`.
+    </ResponseField>
+
+    <ResponseField name="seats" type="object" required>
+      All four seats with player info. Values are `null` (empty) or `{ playerId, username, isBot }`.
+    </ResponseField>
+
+    <ResponseField name="scores" type="object" required>
+      Cumulative scores: `{ ns: number, ew: number }`.
+    </ResponseField>
+
+    <ResponseField name="bags" type="object" required>
+      Accumulated bags: `{ ns: number, ew: number }`.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+## validCards field
+
+<Note>
+  `validCards` is present in the response **only when it is the requesting player's turn to play** during the `playing` phase. The server computes the full set of legal plays via `getLegalPlays` and includes them as an array of card strings (e.g. `["QH", "JH", "9H"]`). Clients may use this array to highlight or restrict UI affordances — for example, greying out cards that are not in the list. However, **the server re-validates every card play regardless**; passing a card not in `validCards` to `POST /api/tables/:tableId/play` returns `400`.
+</Note>
+
+---
+
+## Hand representation
+
+Cards are encoded as a **rank + suit initial** two-character string:
+
+| Rank | Code | Suit     | Code |
+|------|------|----------|------|
+| Ace  | `A`  | Spades   | `S`  |
+| King | `K`  | Hearts   | `H`  |
+| Queen| `Q`  | Diamonds | `D`  |
+| Jack | `J`  | Clubs    | `C`  |
+| 10   | `T`  |          |      |
+| 2–9  | `2`–`9` |       |      |
+
+**Examples:** `AS` = Ace of Spades, `KH` = King of Hearts, `TD` = 10 of Diamonds, `2C` = 2 of Clubs.

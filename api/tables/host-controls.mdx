@@ -1,0 +1,247 @@
+---
+title: "Table Host Controls: Kick, Transfer, Visibility, and Terminate"
+sidebarTitle: "Host Controls"
+description: "Host-only table management endpoints: kick players, transfer host, change visibility, assign seats, and terminate the game. All require x-session-id and x-player-id headers."
+---
+
+The player who creates a table is its host. Host status grants exclusive access to a set of management endpoints that let the host shape the composition and settings of the table before and during a game. All host-only endpoints verify that the caller is the current host and return `403` otherwise. Every endpoint also requires the standard `x-session-id` and `x-player-id` authentication headers.
+
+---
+
+## POST /api/tables/:tableId/kick
+
+Removes a seated player or observer from the table. The host cannot kick themselves.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Request body**
+
+```json
+{ "playerId": "<targetPlayerId>" }
+```
+
+**Behaviour by table state**
+
+| State | Result |
+|---|---|
+| `waiting` | Target's seat is vacated (set to `null`). |
+| `playing` (seated target) | Target's seat is immediately filled by a bot (`bot:<seat>`). If no human players remain after the substitution, the table is terminated. |
+| `playing` (observer target) | Observer is removed; game continues unaffected. |
+
+**WebSocket events**
+
+- `PLAYER_KICKED` — broadcast to the entire table room with `{ playerId, seat }`. `seat` is `null` if the target was an observer.
+- `KICKED_FROM_TABLE` — sent to the kicked player's personal notification channel with `{ tableId }`.
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Player kicked. Body: updated table state, or `{ message }` if the table was terminated as a result. |
+| `400` | Missing `playerId` in body, host attempted to kick themselves, or target player is not at the table |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+
+---
+
+## POST /api/tables/:tableId/transfer-host
+
+Transfers host privileges to another seated human player. Works in both `waiting` and `playing` states. The target must be seated at the table and must not be a bot.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the current host)
+
+**Request body**
+
+```json
+{ "playerId": "<target-player-uuid>" }
+```
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  Host transferred successfully.
+
+  <Expandable title="Response fields">
+    <ResponseField name="tableId" type="string">
+      UUID of the table.
+    </ResponseField>
+
+    <ResponseField name="hostPlayerId" type="string">
+      UUID of the new host.
+    </ResponseField>
+
+    <ResponseField name="newHostSeat" type="string">
+      Seat occupied by the new host: `"north"`, `"east"`, `"south"`, or `"west"`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `400` | Target player is not seated at the table, or target is a bot |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the current host |
+| `404` | Table not found |
+| `409` | Concurrent modification — retry the request |
+
+**WebSocket event:** `HOST_CHANGED` is broadcast to the table room with `{ newHostPlayerId, newHostSeat }`.
+
+---
+
+## POST /api/tables/:tableId/assign-seat
+
+Moves a seated player to a different empty seat. Only allowed while the table is in `waiting` status (game not yet started). Uses optimistic locking internally to prevent a race with `markTablePlaying`; if the table transitions to `playing` between the read and the write the request returns `503` — retry.
+
+If the target player is already in the requested seat, the call succeeds as a no-op (`200`) without emitting any WebSocket events.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Request body**
+
+```json
+{ "playerId": "<player-uuid>", "seat": "south" }
+```
+
+Valid seat values: `north`, `east`, `south`, `west`. Both fields are required.
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  Seat assigned.
+
+  <ResponseField name="tableId" type="string">UUID of the table.</ResponseField>
+  <ResponseField name="seat" type="string">The seat the player was moved to.</ResponseField>
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `400` | Missing `playerId` or `seat`, or invalid seat value |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+| `409` | Game is in progress, target player is not seated at the table, or the target seat is already occupied |
+| `503` | Concurrent modification — retry the request |
+
+---
+
+## POST /api/tables/:tableId/visibility
+
+Changes the table's `visibility` setting. The `joinPolicy` is automatically adjusted to remain compatible with the new visibility (e.g. switching to `private` forces `invite-only`). If the requested visibility matches the current value, the request succeeds as a no-op without firing any events.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Request body**
+
+```json
+{ "visibility": "friends-only" }
+```
+
+Valid values: `"public"`, `"friends-only"`, `"private"`.
+
+**Lobby and friend-list side effects**
+
+The server fires WebSocket events whenever the visibility changes so that lobby and friends-list UIs update in real time.
+
+| Transition | Events fired |
+|---|---|
+| Leaving `public` | `TABLE_REMOVED` broadcast to the lobby channel |
+| Entering `public` | `TABLE_CREATED` broadcast to the lobby channel |
+| Leaving `friends-only` | `TABLE_REMOVED` sent to each of the host's friends via their personal notification channels |
+| Entering `friends-only` | `TABLE_CREATED` sent to each of the host's friends via their personal notification channels |
+| Involving `private` | No lobby or friend-list events in either direction |
+
+A `TABLE_VISIBILITY_CHANGED` event is **always** broadcast to the table room so seated players and observers are informed of the change.
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  Visibility changed.
+
+  <ResponseField name="tableId" type="string">UUID of the table.</ResponseField>
+  <ResponseField name="visibility" type="string">The new visibility setting.</ResponseField>
+  <ResponseField name="joinPolicy" type="string">The (potentially adjusted) join policy that is now in effect.</ResponseField>
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `400` | Invalid visibility value |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+
+<Note>
+  When visibility is changed to `"private"`, the `joinPolicy` is automatically set to `"invite-only"` if it was previously `"open"` or `"friends-only"`. The adjusted `joinPolicy` is returned in the response body.
+</Note>
+
+---
+
+## POST /api/tables/:tableId/add-bot
+
+Adds a bot player to an empty seat. The game starts automatically if all four seats are filled as a result. Bots use the ID `bot:<seat>` (e.g. `bot:north`).
+
+**Bot behaviour:** Bots bid the number of spades in their hand and play a random card from the set of legal plays. Bot turns are processed server-side immediately after each human action — clients do not need to poll separately.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**Request body**
+
+```json
+{ "seat": "north" }
+```
+
+Valid seat values: `north`, `east`, `south`, `west`.
+
+**Responses**
+
+<ResponseField name="200" type="object">
+  Bot added.
+
+  <ResponseField name="tableId" type="string">UUID of the table.</ResponseField>
+  <ResponseField name="seat" type="string">The seat the bot was placed in.</ResponseField>
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `400` | Invalid seat value |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+| `409` | Game already in progress, or the requested seat is already taken |
+
+<Warning>
+  Bots are a development and testing convenience — they are intentionally minimal and not a production AI opponent. A table with all four bot seats will start immediately and play through to completion without human interaction.
+</Warning>
+
+---
+
+## POST /api/tables/:tableId/terminate
+
+Ends the game and removes the table, regardless of the current phase (`waiting` or `playing`). All Redis keys associated with the table (game state, spectator links, invited-player list, lobby index entries) are deleted. All seated players' presence is updated to online.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id` (must be the host)
+
+**No request body required.**
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Game terminated. Body: `{ "message": "Game terminated." }` |
+| `401` | Missing or invalid session |
+| `403` | Caller is not the table host |
+| `404` | Table not found |
+
+**WebSocket event:** A `TABLE_REMOVED` event is routed via the table's current visibility channel (lobby broadcast for public tables, personal notification channels for friends-only tables) so that any lobby or friends-list UIs can remove the entry.

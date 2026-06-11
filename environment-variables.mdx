@@ -1,0 +1,127 @@
+---
+title: "Environment Variable Reference for Spades Online"
+sidebarTitle: "Configuration"
+description: "Complete reference for all environment variables read by the Spades Online server, covering database, Redis, HTTP/WebSocket ports, email, and rate limiting."
+---
+
+The Spades Online server reads all of its configuration from environment variables at startup — there are no config files to edit or `.env` schemas to maintain. Set the variables in your shell, your hosting platform's dashboard, or a process manager before running `npm start`. Only `DATABASE_URL` and `REDIS_URL` are strictly required; every other variable has a sensible default.
+
+## Required
+
+<ParamField query="DATABASE_URL" type="string" required>
+  PostgreSQL connection string. The server uses this to connect the shared `pg` pool used by all route handlers.
+
+  Example: `postgresql://user:password@localhost:5432/spades`
+</ParamField>
+
+<ParamField query="REDIS_URL" type="string" required>
+  Redis connection string. Used for sessions, lobby state, presence tracking, pub/sub notifications, and the rate limiter.
+
+  Example: `redis://localhost:6379`
+</ParamField>
+
+## Server & WebSocket
+
+<ParamField query="PORT" type="number">
+  HTTP server port. Default: `3000`
+</ParamField>
+
+<ParamField query="WS_PORT" type="number">
+  WebSocket server port. Default: same as `PORT` (the WebSocket server shares the HTTP server).
+
+  When set to the same value as `PORT`, the WebSocket server attaches to the existing HTTP server. When set to a **different** value, the WebSocket server starts on its own dedicated HTTP server.
+
+  <Note>
+    When `WS_PORT` differs from `PORT`, a reverse proxy must be configured to route WebSocket upgrade requests from the public HTTP port to `WS_PORT`. Without this, browser clients connecting to the standard HTTP port will not be able to establish WebSocket connections.
+  </Note>
+</ParamField>
+
+<ParamField query="WS_URL" type="string">
+  Full WebSocket base URL. Default: derived from the incoming request origin.
+
+  Set this in split-host deployments where the WebSocket server runs on a different host than the frontend (for example, a Vercel frontend paired with a Railway WebSocket server). When set, the server injects `window.__WS_URL__` into the served HTML so the browser client connects to the correct host.
+
+  Example: `wss://my-app.up.railway.app`
+</ParamField>
+
+## Application
+
+<ParamField query="NODE_ENV" type="string">
+  Environment name. Typical values: `development`, `production`. Default: unset.
+</ParamField>
+
+<ParamField query="APP_URL" type="string">
+  Public base URL of the application. Used to construct absolute URLs in outbound emails (email verification links, password reset links) and in shareable join/spectator link responses. Default: `http://localhost:3000`
+
+  Example: `https://spades.example.com`
+</ParamField>
+
+## Email (SMTP)
+
+The server uses Nodemailer to send transactional emails (account verification and password reset). If `EMAIL_HOST` is not set, emails are logged to stdout instead of being delivered — useful for local development without an SMTP server.
+
+<ParamField query="EMAIL_HOST" type="string">
+  SMTP hostname. If unset, verification and password reset emails are printed to stdout instead of being sent.
+
+  Example: `smtp.mailgun.org`
+</ParamField>
+
+<ParamField query="EMAIL_PORT" type="number">
+  SMTP port. Default: `587`
+</ParamField>
+
+<ParamField query="EMAIL_SECURE" type="string">
+  Set to `true` to enable TLS on port 465. Default: `false`
+</ParamField>
+
+<ParamField query="EMAIL_USER" type="string">
+  SMTP username for authentication. Default: unset.
+</ParamField>
+
+<ParamField query="EMAIL_PASS" type="string">
+  SMTP password for authentication. Default: unset.
+</ParamField>
+
+<ParamField query="EMAIL_FROM" type="string">
+  The `From` address used on all outbound emails. Default: `noreply@spades.online`
+
+  Example: `Spades Online <noreply@spades.example.com>`
+</ParamField>
+
+## Authentication
+
+<ParamField query="AUTH_RATE_LIMIT_MAX" type="number">
+  Maximum number of requests allowed per window for unauthenticated auth endpoints (`/api/auth/*`). Default: `10`
+</ParamField>
+
+<ParamField query="AUTH_RATE_LIMIT_WINDOW" type="number">
+  Rate limit window duration in seconds. Default: `900` (15 minutes)
+</ParamField>
+
+<ParamField query="DEV_AUTO_VERIFY" type="string">
+  Set to `true` to skip email verification on registration. When active, `POST /api/auth/register` marks new accounts as verified immediately, creates a session, and returns it — no email is sent and no token is required.
+
+  The flag is read at request time, so it can be toggled without restarting the server.
+
+  Default: unset (email verification is enforced).
+</ParamField>
+
+<Warning>
+  `DEV_AUTO_VERIFY=true` bypasses all email verification security. **Never set this variable in a production environment.** It exists solely as a local development convenience for testing without an SMTP server.
+</Warning>
+
+## CI / Build Info
+
+<ParamField query="GIT_BRANCH" type="string">
+  The current Git branch name. Typically set by your CI system. Default: unset.
+</ParamField>
+
+<ParamField query="GIT_COMMIT_SHA" type="string">
+  The full Git commit SHA of the running build. Exposed (as a 7-character short SHA) via `GET /api/build-info`. Default: unset.
+
+  If not set, the server automatically checks `VERCEL_GIT_COMMIT_SHA` (Vercel), then `COMMIT_REF` (Netlify), then falls back to running `git rev-parse HEAD`. If none of these are available, `GET /api/build-info` returns `{ commitShort: null }`.
+</ParamField>
+
+<ParamField query="PUSH_API_KEY" type="string">
+  API key for the push notification service. Default: unset.
+</ParamField>

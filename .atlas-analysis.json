@@ -1,0 +1,156 @@
+{
+  "projectType": "saas",
+  "projectName": "Spades Online",
+  "projectDescription": "A real-time multiplayer Spades card game platform with a Node.js/Express backend, WebSocket game engine, PostgreSQL persistence, and a browser-based web client.",
+  "theme": "luma",
+  "primaryColor": "#1B2A4A",
+  "lightColor": "#3A5A8C",
+  "darkColor": "#0D1B2E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "environment-variables"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/database",
+              "architecture/websockets"
+            ]
+          },
+          {
+            "group": "Game Rules",
+            "pages": [
+              "game/rules",
+              "game/scoring",
+              "game/blind-nil"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/setup",
+              "deployment/testing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth/register",
+              "api/auth/login",
+              "api/auth/password-reset",
+              "api/auth/sessions"
+            ]
+          },
+          {
+            "group": "Tables & Lobby",
+            "pages": [
+              "api/tables/lobby",
+              "api/tables/create",
+              "api/tables/join",
+              "api/tables/host-controls"
+            ]
+          },
+          {
+            "group": "Game Actions",
+            "pages": [
+              "api/game/state",
+              "api/game/bidding",
+              "api/game/playing"
+            ]
+          },
+          {
+            "group": "Social",
+            "pages": [
+              "api/social/friends",
+              "api/social/profiles",
+              "api/social/blocking"
+            ]
+          },
+          {
+            "group": "WebSocket",
+            "pages": [
+              "api/websocket/connection",
+              "api/websocket/events"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time 4-player multiplayer Spades via WebSocket",
+    "Table lobby with public, friends-only, and private visibility",
+    "Flexible join policies: open, friends-only, invite-only",
+    "Shareable single-use join links and multi-use spectator links",
+    "In-app friend system with presence (online / in-game / offline)",
+    "Bot players to fill empty seats for solo testing and mid-game replacements",
+    "Blind Nil bidding with card exchange protocol",
+    "Server-side anti-cheat move validation",
+    "Redis-backed session management, presence state, and pub/sub fan-out",
+    "PostgreSQL persistence with career stats and recent game history",
+    "Rate limiting on authentication and social endpoints",
+    "Player profiles with avatars, cosmetics, and career records"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "GET /api/auth/verify-email",
+    "POST /api/auth/login",
+    "POST /api/auth/logout",
+    "POST /api/auth/forgot-password",
+    "POST /api/auth/reset-password",
+    "GET /api/profile/:playerId",
+    "GET /api/tables",
+    "GET /api/lobby/tables",
+    "POST /api/tables",
+    "POST /api/tables/:tableId/sit",
+    "POST /api/tables/:tableId/arrive",
+    "POST /api/tables/:tableId/leave",
+    "POST /api/tables/:tableId/add-bot",
+    "GET /api/tables/:tableId/join-link",
+    "POST /api/tables/join-link/:token",
+    "POST /api/tables/:tableId/spectator-link",
+    "POST /api/tables/spectator-link/:token",
+    "POST /api/tables/:tableId/invite",
+    "POST /api/invites/:inviteId/decline",
+    "POST /api/tables/:tableId/kick",
+    "POST /api/tables/:tableId/transfer-host",
+    "POST /api/tables/:tableId/assign-seat",
+    "POST /api/tables/:tableId/visibility",
+    "POST /api/tables/:tableId/terminate",
+    "GET /api/tables/:tableId/state",
+    "POST /api/tables/:tableId/bid",
+    "POST /api/tables/:tableId/play",
+    "POST /api/tables/:tableId/reveal-hand",
+    "POST /api/tables/:tableId/blind-nil-exchange",
+    "GET /api/players/search",
+    "POST /api/friends/request",
+    "POST /api/friends/accept",
+    "POST /api/friends/decline",
+    "GET /api/friends",
+    "DELETE /api/friends/:playerId",
+    "GET /api/friends/:friendId/table",
+    "POST /api/friends/:friendId/go-to-table",
+    "POST /api/players/:playerId/block",
+    "DELETE /api/players/:playerId/block",
+    "GET /api/players/blocked",
+    "WS JOIN — subscribe to table room events",
+    "WS LEAVE — unsubscribe from table room",
+    "WS JOIN_LOBBY — subscribe to lobby events",
+    "WS LEAVE_LOBBY — unsubscribe from lobby events"
+  ]
+}

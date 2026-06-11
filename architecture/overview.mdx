@@ -1,0 +1,127 @@
+---
+title: "Spades Online Architecture: Server, WebSocket, Redis, and Postgres"
+sidebarTitle: "Overview"
+description: "How the Spades Online HTTP server, WebSocket layer, Redis pub/sub presence engine, and PostgreSQL persistence layer fit together in a single deployable unit."
+---
+
+Spades Online runs as a single Node.js process (ES Modules, no build step). An Express HTTP server handles all REST API routes and serves the static web client from `client/web/`. A WebSocket server, built on the `ws` library, shares the same port by default — the same `http.Server` instance accepts both HTTP requests and WebSocket upgrade requests. Redis is responsible for all ephemeral runtime state: sessions, table data, game state, presence, pub/sub fan-out between server instances, and rate-limit counters. PostgreSQL is the durable store for everything that must survive a restart: player accounts, profiles, game history, friendships, and moderation data.
+
+## Layers
+
+<CardGroup cols={2}>
+  <Card title="HTTP Server" icon="server">
+    Express handles all `/api/*` routes — authentication, table management, game actions, social features, and build info. It also serves `client/web/` as static files and injects runtime configuration (such as `WS_URL` for split-host deployments) into the HTML before serving it.
+  </Card>
+  <Card title="WebSocket Engine" icon="bolt">
+    Real-time game events flow over the WebSocket server. Clients join table rooms (`table:{tableId}`) or the global lobby channel (`lobby`) by sending `JOIN` / `JOIN_LOBBY` messages. The server broadcasts events — `CARD_PLAYED`, `TURN_CHANGED`, `HAND_DEALT`, `TABLE_UPDATED`, and more — to every subscriber in the relevant room.
+  </Card>
+  <Card title="Redis" icon="database">
+    Redis stores sessions, active table and game state, presence records (`presence:{playerId}`), join-link and spectator-link tokens, invite records, and per-IP rate-limit counters. It also acts as the pub/sub broker: each table room and personal notification channel maps to a Redis channel that all server instances subscribe to, enabling horizontal scaling without sticky sessions.
+  </Card>
+  <Card title="PostgreSQL" icon="table">
+    PostgreSQL holds the five durable schemas applied by the numbered migration files: players and email-verification tokens, player profiles and game history, password-reset tokens, friendships, and player blocks. Game results are written to PostgreSQL when a hand completes; everything else stays in Redis until the table is terminated.
+  </Card>
+</CardGroup>
+
+## Request flow
+
+The following steps trace a card play from the client HTTP request to all connected browsers receiving the event.
+
+<Steps>
+  <Step title="Client sends HTTP POST">
+    The client posts `POST /api/tables/:tableId/play` with headers `x-session-id` and `x-player-id`, and a JSON body `{ "card": "AS" }`.
+  </Step>
+  <Step title="Server validates the request">
+    `server.js` validates the session against Redis, checks the player is seated at the table (`getSeatForPlayer`), loads the game state from Redis (`getGameState`), and runs anti-cheat validation (`validateCardPlay`) to confirm it is the player's turn and the card is a legal play.
+  </Step>
+  <Step title="State is updated in Redis">
+    `playCard` returns a new immutable game state. The updated state is written back to Redis via `saveGameState`. Presence records are not modified by card plays; they are updated on connect, disconnect, game start, and game end.
+  </Step>
+  <Step title="WebSocket broadcast via Redis pub/sub">
+    `wss.broadcast(tableId, 'CARD_PLAYED', payload)` publishes the event JSON to the Redis channel `table:{tableId}`. Every server instance that has at least one local WebSocket client subscribed to that table channel receives the published message on its dedicated subscriber connection.
+  </Step>
+  <Step title="Clients receive the event">
+    Each server instance's `onChannelMessage` handler forwards the JSON string to every open WebSocket in the matching room — except observer (`_isObserver`) connections when the event type is `HAND_DEALT`, `HAND_REVEALED`, or `BLIND_NIL_EXCHANGE_PROMPT`. All clients render the updated game state from the event payload.
+  </Step>
+</Steps>
+
+## Deployment modes
+
+Spades Online supports two WebSocket deployment topologies. The default single-host mode requires no extra configuration. Split-host mode is used when the HTTP frontend is hosted on one provider (e.g. Vercel) and the WebSocket server runs separately (e.g. Railway), requiring a reverse proxy to route upgrade requests.
+
+<Tabs>
+  <Tab title="Single Host">
+    When `WS_PORT` is unset or equal to `PORT`, the WebSocket server attaches to the same `http.Server` instance as Express. No reverse proxy is needed — the same TCP port accepts both HTTP and WebSocket upgrade requests.
+
+    ```bash
+    # Required
+    export DATABASE_URL="postgresql://user:password@localhost:5432/spades"
+    export REDIS_URL="redis://localhost:6379"
+
+    # Optional — defaults to 3000
+    export PORT=3000
+
+    npm start
+    ```
+
+    The client connects to `window.location.host`, which already points to the correct port.
+  </Tab>
+  <Tab title="Split Host">
+    Set `WS_PORT` to a different port to run the WebSocket server on a dedicated `http.Server`. Set `WS_URL` so the server injects `window.__WS_URL__` into the HTML — the client reads this value and connects to the correct host. A reverse proxy must route WebSocket upgrade requests from the public port to `WS_PORT`.
+
+    ```bash
+    # Required
+    export DATABASE_URL="postgresql://user:password@db-host:5432/spades"
+    export REDIS_URL="redis://redis-host:6379"
+
+    # Split-host config
+    export PORT=3000
+    export WS_PORT=3001
+    export WS_URL="wss://ws.example.com"
+    ```
+
+    Example nginx snippet to proxy WebSocket upgrades:
+
+    ```nginx
+    server {
+        listen 443 ssl;
+        server_name ws.example.com;
+
+        location / {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Module map
+
+| Module | File | Responsibility |
+|---|---|---|
+| Express entry point | `server/app.js` | Creates the Express app and HTTP server, configures CORS, serves static files, injects `WS_URL`, wires together the HTTP and WebSocket servers, calls `handler()` |
+| Route handlers | `server/server.js` | All `/api/*` route handlers — auth, social, tables, game actions, build info |
+| PostgreSQL pool | `server/db.js` | Shared `pg.Pool` singleton; `getDb()` returns the pool, `closeDb()` tears it down |
+| Redis client | `server/redis.js` | Shared `redis` client singleton; `getRedis()` returns a connected client, `closeRedis()` tears it down |
+| Presence engine | `server/presence.js` | Redis-backed state machine: `setPresenceOnline`, `setPresencePlaying`, `clearPresence`, `setPresenceOnConnect` (reconciles seat state on reconnect) |
+| WebSocket server | `server/ws/index.js` | Authenticated upgrade, room management, Redis pub/sub fan-out, heartbeat, `broadcast`, `broadcastLobby`, `sendToPlayer`, `notifyPlayer` |
+| Auth | `server/auth/*` | Registration, email verification, login, session management, password reset, email sending |
+| Game engine | `server/game/*` | Game state machine, bidding, deck, trick resolution, scoring, bot logic |
+| Social | `server/social/*` | Player profile data access, blocking logic |
+| Lobby | `server/lobby/table.js` | Table creation, seat management, lobby index, join/spectator links |
+| Anti-cheat | `server/anticheat/validate.js` | Server-side move validation: turn enforcement, card legality |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Database" icon="table" href="/architecture/database">
+    PostgreSQL schema details, all five migration files, and notes on what lives in Redis instead.
+  </Card>
+  <Card title="WebSocket" icon="bolt" href="/architecture/websockets">
+    Connection authentication, room types, Redis pub/sub fan-out, observer filtering, heartbeat, and server-side helper methods.
+  </Card>
+</CardGroup>

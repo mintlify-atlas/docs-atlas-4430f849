@@ -1,0 +1,136 @@
+---
+title: "Player Profiles: Stats, Avatar, and Game History"
+sidebarTitle: "Profiles"
+description: "GET /api/profile/:playerId returns a player's public profile including username, avatar, career win/loss record, cosmetics, and the last 20 games played."
+---
+
+Every Spades Online player has a public profile that is readable by anyone without authentication. Profiles include the player's display name, chosen avatar icon, table cosmetics, career win/loss record, and a history of their last 20 completed games. No session headers are required to read a profile.
+
+---
+
+## `GET /api/profile/:playerId`
+
+Fetch the public profile for any player by their UUID.
+
+<ParamField path="playerId" type="string" required>
+  UUID of the player whose profile you want to retrieve.
+</ParamField>
+
+**No authentication required.**
+
+**Example request**
+
+```bash
+curl http://localhost:3000/api/profile/550e8400-e29b-41d4-a716-446655440000
+```
+
+### Response 200
+
+<ResponseField name="playerId" type="string">
+  UUID that uniquely identifies this player.
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  The player's display name as shown in-game and in the lobby.
+</ResponseField>
+
+<ResponseField name="avatar" type="object">
+  The player's selected avatar.
+
+  <Expandable title="avatar fields">
+    <ResponseField name="icon" type="number">
+      Numeric ID of the selected avatar icon. Values 1–8 correspond to the 8 built-in default icons.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="cosmetics" type="object">
+  The player's active table cosmetic settings.
+
+  <Expandable title="cosmetics fields">
+    <ResponseField name="feltColor" type="string">
+      Color of the felt table surface. One of `green`, `navy`, `burgundy`, or `charcoal`.
+    </ResponseField>
+    <ResponseField name="cardBack" type="string">
+      Card back design. One of `standard-red`, `standard-blue`, or `minimal`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="career" type="object">
+  All-time win/loss record across completed games.
+
+  <Expandable title="career fields">
+    <ResponseField name="wins" type="number">
+      Total number of games won.
+    </ResponseField>
+    <ResponseField name="losses" type="number">
+      Total number of games lost.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="recentGames" type="array">
+  The player's last 20 completed games, ordered most recent first.
+
+  <Expandable title="recentGames[n] fields">
+    <ResponseField name="gameId" type="string">
+      UUID of the completed game.
+    </ResponseField>
+    <ResponseField name="playedAt" type="string">
+      ISO 8601 timestamp of when the game completed.
+    </ResponseField>
+    <ResponseField name="won" type="boolean">
+      `true` if this player's partnership won the game.
+    </ResponseField>
+    <ResponseField name="scoreNs" type="number">
+      Final score for the North–South partnership.
+    </ResponseField>
+    <ResponseField name="scoreEw" type="number">
+      Final score for the East–West partnership.
+    </ResponseField>
+    <ResponseField name="seat" type="string">
+      The seat this player occupied: `north`, `east`, `south`, or `west`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Full example response**
+
+```json
+{
+  "playerId": "uuid",
+  "username": "alice",
+  "avatar": { "icon": 3 },
+  "cosmetics": { "feltColor": "green", "cardBack": "standard-red" },
+  "career": { "wins": 10, "losses": 5 },
+  "recentGames": [
+    {
+      "gameId": "uuid",
+      "playedAt": "2026-03-01T12:00:00Z",
+      "won": true,
+      "scoreNs": 260,
+      "scoreEw": 150,
+      "seat": "north"
+    }
+  ]
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Profile found. Body: `{ playerId, username, avatar, cosmetics, career, recentGames }` |
+| `400` | `playerId` path parameter is not a valid UUID |
+| `404` | No player found with this UUID |
+
+---
+
+## Cosmetics Reference
+
+The following options are available for player cosmetics.
+
+| Setting | Available Options |
+|---|---|
+| `feltColor` | `green`, `navy`, `burgundy`, `charcoal` |
+| `cardBack` | `standard-red`, `standard-blue`, `minimal` |
+| Avatar `icon` | `1` – `8` (numeric IDs for the 8 default icons) |

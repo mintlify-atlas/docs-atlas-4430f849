@@ -1,0 +1,122 @@
+---
+title: "Block and Unblock Players on Spades Online"
+sidebarTitle: "Blocking"
+description: "POST /api/players/:playerId/block blocks a player, removing existing friendships. DELETE unblocks. GET /api/players/blocked lists all blocked players."
+---
+
+Blocking prevents the blocked player from sending friend requests or game invitations to you. Any existing accepted friendship or pending friend request between the two players — in either direction — is automatically removed when a block is created. After unblocking, the players must re-add each other as friends; the previous friendship is not restored.
+
+All blocking endpoints require the `x-session-id` and `x-player-id` request headers.
+
+---
+
+## Block a Player
+
+### `POST /api/players/:playerId/block`
+
+Blocks the specified player. If any friendship or pending friend request exists between the two players, it is removed. If the players were friends and either hosted a friends-only table, a `TABLE_REMOVED` notification is sent to the other player's personal notification channel for each such table.
+
+<ParamField path="playerId" type="string" required>
+  UUID of the player to block.
+</ParamField>
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Example request**
+
+```bash
+curl -X POST http://localhost:3000/api/players/550e8400-e29b-41d4-a716-446655440000/block \
+  -H "x-session-id: <your-session-id>" \
+  -H "x-player-id: <your-player-id>"
+```
+
+<Note>
+  Blocking is **idempotent**. If the target player is already blocked, the request succeeds silently with `201` — no error is returned and no side effects are re-applied.
+</Note>
+
+**Side effects on block creation:**
+
+- Any accepted friendship between the two players is deleted.
+- Any pending friend request in either direction is deleted.
+- If either player hosted a friends-only table, `TABLE_REMOVED` is sent to the other player's personal notification channel for each such table.
+
+| Status | Meaning |
+|---|---|
+| `201` | Player blocked. Existing friendship and pending requests removed. |
+| `400` | `:playerId` is not a valid UUID, or you are attempting to block yourself |
+| `401` | Missing or invalid session |
+| `404` | Target player not found |
+
+---
+
+## Unblock a Player
+
+### `DELETE /api/players/:playerId/block`
+
+Unblocks the specified player. After unblocking, both players can send friend requests to each other again. The previous friendship is **not** automatically restored — they must re-add each other.
+
+<ParamField path="playerId" type="string" required>
+  UUID of the player to unblock.
+</ParamField>
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Example request**
+
+```bash
+curl -X DELETE http://localhost:3000/api/players/550e8400-e29b-41d4-a716-446655440000/block \
+  -H "x-session-id: <your-session-id>" \
+  -H "x-player-id: <your-player-id>"
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Player unblocked successfully |
+| `400` | `:playerId` is not a valid UUID |
+| `401` | Missing or invalid session |
+| `404` | Block record not found — this player was not blocked |
+
+---
+
+## List Blocked Players
+
+### `GET /api/players/blocked`
+
+Returns all players that the authenticated player has blocked, ordered by most recently blocked first.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Example request**
+
+```bash
+curl http://localhost:3000/api/players/blocked \
+  -H "x-session-id: <your-session-id>" \
+  -H "x-player-id: <your-player-id>"
+```
+
+**Response 200**
+
+```json
+{
+  "blocked": [
+    {
+      "playerId": "uuid",
+      "username": "bob",
+      "blockedAt": "2026-03-01T12:00:00Z"
+    }
+  ]
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ blocked: [{ playerId, username, blockedAt }] }` — ordered most recently blocked first |
+| `401` | Missing or invalid session |
+
+---
+
+## Effect on Other Endpoints
+
+<Note>
+  When either player has blocked the other, the friend request, accept, and decline endpoints (`POST /api/friends/request`, `POST /api/friends/accept`, `POST /api/friends/decline`) all return `403`. The block check is bidirectional — it applies regardless of which player placed the block.
+</Note>

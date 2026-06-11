@@ -1,0 +1,244 @@
+---
+title: "Friends API: Requests, Presence, and Table Navigation"
+sidebarTitle: "Friends"
+description: "Send, accept, and decline friend requests. List friends with presence status and table info. Navigate directly to a friend's table as an observer."
+---
+
+The friends system lets players connect with each other, see each other's online/in-game/offline presence status, and navigate directly to a friend's active table as an observer. All endpoints listed on this page require the `x-session-id` and `x-player-id` request headers for authentication.
+
+---
+
+## Player Search
+
+### `GET /api/players/search`
+
+Search for players by username prefix before sending a friend request.
+
+<ParamField query="username" type="string" required>
+  Case-insensitive prefix to match against player usernames. Maximum 50 characters. Returns up to 20 results ordered alphabetically. The requesting player is always excluded from results.
+</ParamField>
+
+**Response 200**
+
+```json
+{
+  "players": [
+    { "playerId": "uuid", "username": "alice" }
+  ]
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Players found (may be an empty array). Body: `{ players: [{ playerId, username }] }` |
+| `400` | `username` query parameter is missing or blank |
+| `401` | Missing or invalid session |
+
+<Note>
+  This endpoint is rate limited. Repeated searches in a short window may return `429 Too Many Requests`.
+</Note>
+
+---
+
+## Friend Requests
+
+### `POST /api/friends/request`
+
+Send a friend request to another player. On success, a `FRIEND_REQUEST_RECEIVED` WebSocket notification is published to the recipient's personal notification channel.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Request body**
+
+```json
+{ "playerId": "<uuid>" }
+```
+
+| Status | Meaning |
+|---|---|
+| `201` | Friend request sent. `FRIEND_REQUEST_RECEIVED` published to recipient's notification channel. |
+| `400` | `playerId` is not a valid UUID, or you are attempting to friend yourself |
+| `401` | Missing or invalid session |
+| `403` | Either player has blocked the other |
+| `404` | Target player not found |
+| `409` | Already friends, or a request is already pending |
+
+---
+
+### `POST /api/friends/accept`
+
+Accept a pending incoming friend request. On success, a `FRIEND_REQUEST_ACCEPTED` notification is published to the original requester's personal notification channel. If either player hosts a friends-only table, a `TABLE_CREATED` notification is sent to the new friend's channel for each such table.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Request body**
+
+```json
+{ "playerId": "<uuid>" }
+```
+
+The `playerId` is the **requester's** UUID — the player whose pending request you want to accept.
+
+| Status | Meaning |
+|---|---|
+| `200` | Request accepted. `FRIEND_REQUEST_ACCEPTED` published to requester's notification channel. `TABLE_CREATED` sent for each friends-only table hosted by either player. |
+| `400` | `playerId` is not a valid UUID |
+| `401` | Missing or invalid session |
+| `403` | Either player has blocked the other |
+| `404` | No pending friend request found from this player |
+
+---
+
+### `POST /api/friends/decline`
+
+Decline a pending incoming friend request. The friendship row is deleted from the database; no notification is sent.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Request body**
+
+```json
+{ "playerId": "<uuid>" }
+```
+
+The `playerId` is the **requester's** UUID — the player whose pending request you want to decline.
+
+| Status | Meaning |
+|---|---|
+| `200` | Request declined and friendship row deleted |
+| `400` | `playerId` is not a valid UUID |
+| `401` | Missing or invalid session |
+| `403` | Either player has blocked the other |
+| `404` | No pending friend request found from this player |
+
+---
+
+## List Friends
+
+### `GET /api/friends`
+
+Returns two arrays: `friends` (accepted friendships enriched with live presence and table info) and `pending` (incoming requests awaiting your response). Pending entries are not enriched with presence or table data.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Response 200**
+
+<ResponseField name="friends" type="array">
+  Array of accepted friendships, each enriched with presence and table visibility data.
+
+  <Expandable title="friends[n] fields">
+    <ResponseField name="playerId" type="string">
+      UUID of the friend.
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Display name of the friend.
+    </ResponseField>
+    <ResponseField name="since" type="string">
+      ISO 8601 timestamp of when the friendship was established.
+    </ResponseField>
+    <ResponseField name="presenceStatus" type="string">
+      Current presence state. One of `"online"`, `"in-game"`, or `"offline"`. A missing presence key is treated as offline.
+    </ResponseField>
+    <ResponseField name="tableInfo" type="object | null">
+      `null` when the friend is not in a game. Otherwise an object `{ tableName }` — see the note below for disclosure rules.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="pending" type="array">
+  Array of incoming friend requests awaiting your acceptance or decline.
+
+  <Expandable title="pending[n] fields">
+    <ResponseField name="playerId" type="string">
+      UUID of the player who sent the request.
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Display name of the requester.
+    </ResponseField>
+    <ResponseField name="sentAt" type="string">
+      ISO 8601 timestamp of when the request was sent.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  **`tableName` disclosure rules:** Public tables always disclose the table name. Friends-only tables disclose the name only when the requesting player is also a friend of the table host. Private tables — and tables whose data has expired or is missing — always return `tableName: null`.
+</Note>
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ friends: [...], pending: [...] }` |
+| `401` | Missing or invalid session |
+
+---
+
+## Remove a Friend
+
+### `DELETE /api/friends/:playerId`
+
+Removes an accepted friendship. Both directions of the friendship record are deleted. If either player hosts a friends-only table, a `TABLE_REMOVED` notification is sent to the other player's personal notification channel for each such table.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+| Status | Meaning |
+|---|---|
+| `200` | Friend removed. `TABLE_REMOVED` sent for each affected friends-only table. |
+| `400` | `:playerId` is not a valid UUID |
+| `401` | Missing or invalid session |
+| `404` | Friendship not found |
+
+---
+
+## Table Navigation
+
+### `GET /api/friends/:friendId/table`
+
+Checks whether a friend is currently at a table that is visible to the requester, and indicates whether the "Go to Table" action is available based on the table's spectating setting and join policy.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Response 200**
+
+```json
+{
+  "table": {
+    "tableId": "uuid",
+    "name": "Alice's Table",
+    "hostPlayerId": "uuid",
+    "status": "playing",
+    "visibility": "public",
+    "spectating": true
+  },
+  "canGoToTable": true
+}
+```
+
+Returns `{ "table": null, "canGoToTable": false }` when the friend is not at a table or the table is not visible to the requester.
+
+| Status | Meaning |
+|---|---|
+| `200` | Body: `{ table: { tableId, name, hostPlayerId, status, visibility, spectating } \| null, canGoToTable: boolean }` |
+| `401` | Missing or invalid session |
+| `403` | Not friends with this player |
+
+---
+
+### `POST /api/friends/:friendId/go-to-table`
+
+Navigates to a friend's table as an observer. The table must be visible to the requester and either spectating must be enabled or the requester must have seating rights under the table's join policy. On success, an `OBSERVER_JOINED` event is broadcast to the table room.
+
+**Headers:** `x-session-id`, `x-player-id`
+
+**Response 200**
+
+```json
+{ "tableId": "uuid" }
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Successfully arrived at the table as an observer. Body: `{ tableId }`. `OBSERVER_JOINED` broadcast to table room. |
+| `401` | Missing or invalid session |
+| `403` | Not friends with this player, table is not visible, or no permission to join as observer |
+| `404` | Friend is not currently at a table |
+| `409` | Observer slots are full, or concurrent modification — retry the request |
