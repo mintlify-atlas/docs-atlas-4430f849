@@ -1,7 +1,7 @@
 ---
 title: "Deploy Spades Online: Railway, Vercel, and Self-Hosted"
 sidebarTitle: "Setup"
-description: "Step-by-step deployment guide for Spades Online: self-hosting on a Linux server, deploying to Railway, or splitting frontend and WebSocket across Vercel and Railway."
+description: "Deploy Spades Online on Linux, Railway, or split across Vercel and Railway — covers environment variables, migrations, and rate limiting."
 ---
 
 Spades Online is a single Node.js process that serves the web client, HTTP API, and WebSocket connections all on one port — no separate build step required. It can be deployed as a unified service on any Node.js host, or split across two platforms: Vercel handles the static web client and HTTP API routes while Railway runs the WebSocket server separately. Both models are fully supported and share the same codebase.
@@ -240,6 +240,10 @@ The full set of environment variables supported by Spades Online:
 | `AUTH_RATE_LIMIT_MAX` | No | `10` | Max auth requests per window |
 | `AUTH_RATE_LIMIT_WINDOW` | No | `900` | Rate limit window in seconds (default: 15 minutes) |
 | `DEV_AUTO_VERIFY` | No | — | Skip email verification on registration. **Local dev only.** |
+
+<Warning>
+  Never set `DEV_AUTO_VERIFY=true` in production. It completely disables email verification, allowing any registration to skip the email confirmation step. This is a local development convenience only.
+</Warning>
 
 ## Rate Limiting
 

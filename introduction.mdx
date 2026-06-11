@@ -1,7 +1,7 @@
 ---
 title: "Spades Online: Self-Hosted Multiplayer Card Game Server"
 sidebarTitle: "Introduction"
-description: "Spades Online is a production-ready Node.js server for real-time 4-player Spades. Ships with a WebSocket engine, Redis presence, PostgreSQL persistence, and a browser client."
+description: "Self-hosted, real-time 4-player Spades built on Node.js, Express, WebSocket, Redis, and PostgreSQL — with a Vanilla JS browser client included."
 ---
 
 Spades Online is a production-ready, self-hosted multiplayer card game server built on Node.js and Express. It ships with a real-time WebSocket engine, a Redis-backed lobby and presence system, a PostgreSQL persistence layer, and a fully functional Vanilla JS single-page web client — everything you need to run a complete 4-player Spades game platform. It is aimed at developers who want to self-host the game, integrate the API into their own frontend, or extend the platform with new features.
@@ -37,7 +37,7 @@ Spades Online is a production-ready, self-hosted multiplayer card game server bu
 | Real-time | WebSocket (`ws` library) — shares HTTP server by default; configurable via `WS_PORT` |
 | Session / Presence / Pub-Sub | Redis |
 | Persistent storage | PostgreSQL |
-| Web client | Vanilla JS SPA (served as static files by Express) |
+| Web client | Vanilla JS SPA (hash router, no build step) |
 
 ## Project Structure
 

@@ -1,7 +1,7 @@
 ---
-title: "Environment Variable Reference for Spades Online"
+title: "Spades Online Environment Variables Configuration Guide"
 sidebarTitle: "Configuration"
-description: "Complete reference for all environment variables read by the Spades Online server, covering database, Redis, HTTP/WebSocket ports, email, and rate limiting."
+description: "Complete reference for every environment variable the Spades Online server reads, covering database, Redis, ports, email, and rate limiting."
 ---
 
 The Spades Online server reads all of its configuration from environment variables at startup — there are no config files to edit or `.env` schemas to maintain. Set the variables in your shell, your hosting platform's dashboard, or a process manager before running `npm start`. Only `DATABASE_URL` and `REDIS_URL` are strictly required; every other variable has a sensible default.

@@ -1,7 +1,7 @@
 ---
-title: "Table Host Controls: Kick, Transfer, Visibility, and Terminate"
+title: "Spades Table Host Controls: Kick, Assign, and Manage"
 sidebarTitle: "Host Controls"
-description: "Host-only table management endpoints: kick players, transfer host, change visibility, assign seats, and terminate the game. All require x-session-id and x-player-id headers."
+description: "Host-only endpoints to kick players, transfer host, change visibility, assign seats, add bots, and terminate a table. Require x-session-id and x-player-id."
 ---
 
 The player who creates a table is its host. Host status grants exclusive access to a set of management endpoints that let the host shape the composition and settings of the table before and during a game. All host-only endpoints verify that the caller is the current host and return `403` otherwise. Every endpoint also requires the standard `x-session-id` and `x-player-id` authentication headers.
@@ -33,7 +33,7 @@ Removes a seated player or observer from the table. The host cannot kick themsel
 **WebSocket events**
 
 - `PLAYER_KICKED` — broadcast to the entire table room with `{ playerId, seat }`. `seat` is `null` if the target was an observer.
-- `KICKED_FROM_TABLE` — sent to the kicked player's personal notification channel with `{ tableId }`.
+- `KICKED_FROM_TABLE` — sent to the kicked player's personal notification channel (`player:{playerId}:notify`) with `{ tableId }`.
 
 **Responses**
 
@@ -60,6 +60,8 @@ Transfers host privileges to another seated human player. Works in both `waiting
 ```json
 { "playerId": "<target-player-uuid>" }
 ```
+
+**WebSocket event:** `HOST_CHANGED` is broadcast to the table room with `{ newHostPlayerId, newHostSeat }`.
 
 **Responses**
 
@@ -88,8 +90,6 @@ Transfers host privileges to another seated human player. Works in both `waiting
 | `403` | Caller is not the current host |
 | `404` | Table not found |
 | `409` | Concurrent modification — retry the request |
-
-**WebSocket event:** `HOST_CHANGED` is broadcast to the table room with `{ newHostPlayerId, newHostSeat }`.
 
 ---
 
@@ -147,9 +147,13 @@ Changes the table's `visibility` setting. The `joinPolicy` is automatically adju
 
 Valid values: `"public"`, `"friends-only"`, `"private"`.
 
+**WebSocket events**
+
+A `TABLE_VISIBILITY_CHANGED` event is **always** broadcast to the table room (when visibility actually changes) so seated players and observers are informed of the change. Payload: `{ tableId, visibility, oldVisibility, joinPolicy }`.
+
 **Lobby and friend-list side effects**
 
-The server fires WebSocket events whenever the visibility changes so that lobby and friends-list UIs update in real time.
+The server fires additional WebSocket events whenever the visibility changes so that lobby and friends-list UIs update in real time.
 
 | Transition | Events fired |
 |---|---|
@@ -158,8 +162,6 @@ The server fires WebSocket events whenever the visibility changes so that lobby 
 | Leaving `friends-only` | `TABLE_REMOVED` sent to each of the host's friends via their personal notification channels |
 | Entering `friends-only` | `TABLE_CREATED` sent to each of the host's friends via their personal notification channels |
 | Involving `private` | No lobby or friend-list events in either direction |
-
-A `TABLE_VISIBILITY_CHANGED` event is **always** broadcast to the table room so seated players and observers are informed of the change.
 
 **Responses**
 
@@ -186,7 +188,7 @@ A `TABLE_VISIBILITY_CHANGED` event is **always** broadcast to the table room so 
 
 ## POST /api/tables/:tableId/add-bot
 
-Adds a bot player to an empty seat. The game starts automatically if all four seats are filled as a result. Bots use the ID `bot:<seat>` (e.g. `bot:north`).
+Host-only. Adds a bot player to an empty seat. The game starts automatically if all four seats are filled as a result. Bots use the ID `bot:<seat>` (e.g. `bot:north`).
 
 **Bot behaviour:** Bots bid the number of spades in their hand and play a random card from the set of legal plays. Bot turns are processed server-side immediately after each human action — clients do not need to poll separately.
 
@@ -201,6 +203,11 @@ Adds a bot player to an empty seat. The game starts automatically if all four se
 ```
 
 Valid seat values: `north`, `east`, `south`, `west`.
+
+**WebSocket events (when all 4 seats are filled)**
+
+- `GAME_STARTED` — broadcast to the table room.
+- `TURN_CHANGED` — broadcast to the table room with `{ activeSeat, phase }`.
 
 **Responses**
 

@@ -87,6 +87,6 @@ The Blind Nil outcome is scored in addition to the team bid result. For full sco
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/tables/:tableId/bid` with `{"bid": -1}` | Bid Blind Nil (server uses `"blind_nil"` internally; clients send `-1`) |
+| `POST /api/tables/:tableId/bid` with `{"bid": "blind_nil"}` | Bid Blind Nil — send the string `"blind_nil"` as the bid value |
 | `POST /api/tables/:tableId/reveal-hand` | Reveal hand during the Blind Nil eligibility window, forfeiting Blind Nil |
 | `POST /api/tables/:tableId/blind-nil-exchange` | Submit one step of the card exchange (called twice: once by the Blind Nil player, once by their partner) |

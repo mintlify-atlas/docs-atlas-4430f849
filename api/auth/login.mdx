@@ -1,7 +1,7 @@
 ---
-title: "Authenticate with Spades Online: Login and Logout"
+title: "Log In and Out of Spades Online with Session Tokens"
 sidebarTitle: "Login"
-description: "POST /api/auth/login authenticates a player and returns a session token. POST /api/auth/logout invalidates the session. Session tokens are passed as x-session-id headers."
+description: "Authenticate with email and password to receive a session token. All protected API endpoints require both x-session-id and x-player-id headers."
 ---
 
 Authentication in Spades Online is session-based. After a successful login, the server creates a session in Redis and returns a `sessionId` UUID. Every subsequent authenticated request must include this token in the `x-session-id` header alongside the `x-player-id` header. Sessions are stored in Redis with a 7-day TTL and are immediately invalidated on logout.

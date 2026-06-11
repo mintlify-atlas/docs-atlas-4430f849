@@ -1,7 +1,7 @@
 ---
-title: "Register and Verify a Spades Online Account"
+title: "Create and Verify a New Spades Online Player Account"
 sidebarTitle: "Registration"
-description: "POST /api/auth/register creates a new player account and sends a verification email. GET /api/auth/verify-email activates the account using the emailed token."
+description: "Create a player account with email, username, and password. A 24-hour verification link is emailed before the account becomes active."
 ---
 
 Registration creates a new player account identified by email address, display username, and password. The account is inactive immediately after registration — the player must click the verification link sent to their email before they can log in. Once verified, the account is permanently active and the token is consumed.
@@ -131,7 +131,6 @@ curl -X POST http://localhost:3000/api/auth/resend-verification \
 | Status | Meaning |
 |---|---|
 | `200` | Request accepted. If the email is registered and unverified, a new verification link has been sent. |
-| `500` | Internal server error. |
 
 <Note>
   This endpoint always returns `200`, even when the supplied email address is not found in the database or the account is already verified. This behaviour is intentional — it prevents account enumeration by making it impossible for an unauthenticated caller to determine whether a given email address is registered.

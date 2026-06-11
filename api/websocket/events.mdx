@@ -1,7 +1,7 @@
 ---
-title: "WebSocket Event Reference for Spades Online"
+title: "Spades Online WebSocket Server Events Full Reference"
 sidebarTitle: "Events"
-description: "Complete reference for all server-sent WebSocket events: table room events, lobby events, game events, personal notification events, and observer-specific behavior."
+description: "Complete reference for all server-sent WebSocket events: table room events, lobby events, personal notification events, and observer filtering behavior."
 ---
 
 The server emits all events to subscribed clients using the same JSON envelope: `{ "type": "<TYPE>", "payload": { ... } }`. Events are routed based on the room the client has joined and the table's visibility setting — clients only receive events relevant to the rooms they have explicitly subscribed to, plus personal notification events which are delivered automatically to every authenticated connection.
@@ -14,7 +14,7 @@ These events are sent in direct response to a client subscription or unsubscript
 |---|---|---|
 | `JOINED` | `JOIN` | `{ tableId }` |
 | `LEFT` | `LEAVE` | `{ tableId }` |
-| `JOIN_DENIED` | `JOIN` (rejected) | `{ tableId, reason: "not_seated" \| "table_not_found" \| "error" }` |
+| `JOIN_DENIED` | `JOIN` (rejected) | `{ tableId, reason: "not_seated_or_observing" \| "table_not_found" \| "error" }` |
 | `JOINED_LOBBY` | `JOIN_LOBBY` | `{}` |
 | `LEFT_LOBBY` | `LEAVE_LOBBY` | `{}` |
 

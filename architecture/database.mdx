@@ -213,8 +213,7 @@ The following data is stored exclusively in Redis and is **not persisted to Post
 | `game:{tableId}` | Full game state: hands, bids, tricks, scores, phase |
 | `presence:{playerId}` | Player presence: `{ status: 'online' \| 'playing', tableId }` |
 | `lobby:tables` | Hash of public waiting tables for the lobby browser |
-| `lobby:all` | Hash of all active tables (used for presence reconciliation) |
-| `player:{tableId}` | Reverse index: tableId for a seated player |
+| `lobby:all` | Hash of all active tables (used for presence reconciliation and player-to-table lookup) |
 | `joinlink:{token}` | Single-use join link: `{ tableId, createdAt }` |
 | `spectatorlink:{token}` | Multi-use spectator link: `{ tableId }` |
 | `invite:{tableId}:{playerId}` | Active invite duplicate-check key |

@@ -1,7 +1,7 @@
 ---
-title: "Session Management and Authentication Headers"
+title: "Spades Online Session Tokens, Headers, and Lifecycle"
 sidebarTitle: "Sessions"
-description: "How Spades Online sessions work: Redis-backed tokens, the x-session-id and x-player-id header protocol, and session lifecycle from login to logout."
+description: "Sessions are stored in Redis with a 7-day TTL. Every protected endpoint requires both x-session-id and x-player-id headers to be validated."
 ---
 
 Sessions in Spades Online are stored in Redis as UUID tokens with a 7-day TTL. Every API request that requires authentication must include both the `x-session-id` and `x-player-id` headers. The server looks up the session by token, verifies that the stored `playerId` matches the `x-player-id` header, and rejects the request with `401` if either header is missing or the session has expired or been deleted.
@@ -68,7 +68,7 @@ On page reload, these values are read back from `sessionStorage` so the player r
 Sessions are invalidated in two ways:
 
 - **Explicit logout** — calling `POST /api/auth/logout` with the `x-session-id` header deletes the Redis key immediately. The token becomes invalid for all subsequent requests.
-- **Natural expiry** — sessions are stored in Redis with a **7-day TTL**. If the player does not log out manually, the session expires automatically after 7 days of inactivity.
+- **Natural expiry** — sessions are stored in Redis with a **7-day TTL**. If the player does not log out manually, the session expires automatically after 7 days.
 
 ---
 

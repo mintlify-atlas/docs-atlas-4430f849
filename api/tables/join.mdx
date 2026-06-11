@@ -1,7 +1,7 @@
 ---
-title: "Join, Sit, and Invite Players to a Spades Table"
+title: "Join a Spades Table: Sit, Links, Invites, and Leave"
 sidebarTitle: "Join Table"
-description: "How to sit at a table, use join links and spectator links, send in-app invites, and arrive as an observer. Covers POST /api/tables/:tableId/sit, join-link, and spectator-link endpoints."
+description: "Sit at a table, use single-use join links or spectator links, send in-app invites, and leave. Covers sit, arrive, join, and link endpoints."
 ---
 
 Players can join a table in four ways: **sitting** directly (subject to the table's join policy), **using a join link** that the host has generated (bypasses join policy), **using a spectator link** (observer-only access), or **accepting an in-app invite** sent by the host. Observers can also arrive at a table without a link if spectating is enabled. The game starts automatically the moment all four seats (`north`, `east`, `south`, `west`) are filled.
@@ -36,6 +36,12 @@ Valid seat values: `north`, `east`, `south`, `west`.
 
 The host always passes policy checks regardless of the configured policy.
 
+**WebSocket events**
+
+- `SEAT_TAKEN` — broadcast to the table room with `{ seat }` when a player takes a seat (table not yet full).
+- `GAME_STARTED` — broadcast to the table room when all 4 seats are filled and the game begins.
+- `TURN_CHANGED` — broadcast to the table room with `{ activeSeat, phase }` after the game starts.
+
 **Responses**
 
 | Status | Meaning |
@@ -51,13 +57,17 @@ The host always passes policy checks regardless of the configured policy.
 
 ## POST /api/tables/:tableId/arrive
 
-Arrive at a table as an observer without a link. The table must have spectating enabled. If the player is already seated or already an observer, the call is idempotent and succeeds.
+Arrive at a table as an observer without a link. The table must have spectating enabled unless the player holds a valid join link. If the player is already seated or already an observer, the call is idempotent and succeeds.
 
 **Path parameter:** `tableId` — UUID of the table.
 
 **Required headers:** `x-session-id`, `x-player-id`
 
 **No request body required.**
+
+**WebSocket events**
+
+- `OBSERVER_JOINED` — broadcast to the table room with `{ playerId }`.
 
 **Responses**
 
@@ -71,11 +81,37 @@ Arrive at a table as an observer without a link. The table must have spectating 
 
 ---
 
+## POST /api/tables/:tableId/join
+
+Join a table as a spectator (observer). The table must have spectating enabled. Players who join via this endpoint can watch the game but cannot sit down — use a join link or the `/sit` endpoint to take a seat.
+
+**Path parameter:** `tableId` — UUID of the table.
+
+**Required headers:** `x-session-id`, `x-player-id`
+
+**No request body required.**
+
+**WebSocket events**
+
+- `OBSERVER_JOINED` — broadcast to the table room with `{ playerId }`.
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `200` | Joined as observer. Body: `{ tableId }` |
+| `401` | Missing or invalid session |
+| `403` | Spectating is disabled for this table |
+| `404` | Table not found |
+| `409` | Observer slots are full (max 20) |
+
+---
+
 ## Join Links
 
 Join links allow the host to share a single-use URL that grants any authenticated player the ability to sit at the table, bypassing the table's join policy. This is the primary way to invite players to `invite-only` tables via an external channel (e.g. chat).
 
-### GET /api/tables/:tableId/join-link
+### POST /api/tables/:tableId/join-link
 
 Host-only. Generates a single-use join link token. The token is stored in Redis and expires after one hour of table inactivity.
 
@@ -105,7 +141,7 @@ Host-only. Generates a single-use join link token. The token is stored in Redis 
 
 Consumes a join link token and seats the player at the associated table. The token is **deleted on use** so it cannot be reused. The table's `joinPolicy` is intentionally bypassed — the link itself serves as host authorisation.
 
-**Path parameter:** `token` — join link token from `GET /api/tables/:tableId/join-link` or an in-app invite.
+**Path parameter:** `token` — join link token from `POST /api/tables/:tableId/join-link` or an in-app invite.
 
 **Required headers:** `x-session-id`, `x-player-id`
 
@@ -167,13 +203,17 @@ Host-only. Generates a shareable spectator link. Spectating must be enabled on t
 
 ### POST /api/tables/spectator-link/:token
 
-Validates a spectator link token and adds the authenticated player to the table as an observer. The player is permanently marked as spectator-only for this table session — they cannot sit down even if a seat is free.
+Validates a spectator link token and adds the authenticated player to the table as an observer. The player is permanently marked as spectator-only for this table session — they cannot sit down even if a seat is free. The token is **not consumed** — it can be reused by multiple players.
 
 **Path parameter:** `token` — spectator link token.
 
 **Required headers:** `x-session-id`, `x-player-id`
 
 **No request body required.**
+
+**WebSocket events**
+
+- `OBSERVER_JOINED` — broadcast to the table room with `{ playerId }`.
 
 **Responses**
 
@@ -230,7 +270,7 @@ The `token` in the response is a single-use join link the invited player can use
 
 ### POST /api/invites/:inviteId/decline
 
-Invitee-only. Declines a pending invite. All associated Redis keys (the invite record, the duplicate-check key, the join-link token, and the invited-list entry) are deleted. A `INVITE_DECLINED` event is published to the host's notification channel so their UI can update.
+Invitee-only. Declines a pending invite. All associated Redis keys (the invite record, the duplicate-check key, the join-link token, and the invited-list entry) are deleted. An `INVITE_DECLINED` event is published to the host's notification channel so their UI can update.
 
 **Path parameter:** `inviteId` — UUID from the `inviteId` field in `INVITE_RECEIVED` or the invite response.
 

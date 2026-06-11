@@ -1,7 +1,7 @@
 ---
-title: "Browse and List Tables in the Spades Online Lobby"
+title: "Browse and List All Tables in the Spades Online Lobby"
 sidebarTitle: "Lobby"
-description: "GET /api/tables and GET /api/lobby/tables return open tables. GET /api/player/table returns the authenticated player's current table."
+description: "List public waiting tables with GET /api/tables and GET /api/lobby/tables. Look up a player's current table with GET /api/player/table."
 ---
 
 The lobby exposes two list endpoints and one player-table lookup. `GET /api/tables` returns all waiting public tables with no filtering. `GET /api/lobby/tables` targets the in-app lobby browser and supports optional query filters for seat availability and name search. Both list endpoints return the same response shape — an array of enriched table objects under the `tables` key. `GET /api/player/table` is a lightweight lookup that tells the caller which table (if any) they are currently seated at or observing.
@@ -128,7 +128,7 @@ curl 'http://localhost:3000/api/lobby/tables?hasSeats=true&search=alice' \
 | `401` | Missing or invalid session |
 
 <Note>
-  `GET /api/lobby/tables` computes `canJoin` relative to the authenticated player: for `friends-only` join-policy tables, the flag is `true` only when the requester is a friend of the host **and** a seat is available. `GET /api/tables` does not have access to the requester identity and always sets `canJoin: false` for friends-only tables.
+  `GET /api/lobby/tables` computes `canJoin` relative to the authenticated player: for `friends-only` join-policy tables, the flag is `true` only when the requester is a friend of the host **and** a seat is available. `GET /api/tables` does not receive the requester identity and always sets `canJoin: false` for friends-only tables.
 </Note>
 
 ---

@@ -1,5 +1,5 @@
 ---
-title: "Get Started with Spades Online in 5 Minutes"
+title: "Spades Online Local Setup: From Install to First Game"
 sidebarTitle: "Quickstart"
 description: "Install, configure, and run the Spades Online server locally with PostgreSQL and Redis. From zero to a working game in five steps."
 ---
@@ -101,10 +101,13 @@ DEV_AUTO_VERIFY=true npm start
 
 You can fill any empty seat at a table with a bot player to test gameplay without needing four human players. The table host sends a request specifying the target seat:
 
-```bash
+```http
 POST /api/tables/:tableId/add-bot
-Headers: x-session-id, x-player-id
-Body: { "seat": "north" }   # valid values: north, east, south, west
+x-session-id: <sessionId>
+x-player-id: <playerId>
+Content-Type: application/json
+
+{ "seat": "north" }
 ```
 
 Bot players bid by counting the spades in their hand and play a random legal card. Their turns are processed automatically server-side — human players just poll `GET /api/tables/:tableId/state` as normal. Once all four seats are filled (by any mix of humans and bots), the game starts automatically.
@@ -116,6 +119,14 @@ npm test
 ```
 
 Unit tests cover the game engine, anti-cheat validation, lobby logic, and middleware, and run without any external services. Integration tests require `DATABASE_URL` to be set and will be skipped if it is absent.
+
+To run the linter separately:
+
+```bash
+npm run lint
+```
+
+This runs ESLint against the `test/integration` directory. The same check runs in CI before the test suite.
 
 ## Next Steps
 

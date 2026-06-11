@@ -33,7 +33,7 @@ At the start of each hand the server builds a standard 52-card deck (no jokers),
 
 After the deal, each player makes a bid — a commitment to win a certain number of tricks during that hand.
 
-**Bid values:** Any integer from 0 to 13. A bid of `0` is a [Nil bid](/game/blind-nil). A bid of `-1` (submitted as `"blind_nil"` in the API) is a [Blind Nil bid](/game/blind-nil), subject to eligibility rules.
+**Bid values:** Any integer from 0 to 13, `"nil"`, or `"blind_nil"` (if eligible). A numeric bid of `0` is a legal zero-tricks bid and is **not** the same as a Nil bid — every trick the team takes when both bid `0` is a bag, but no Nil bonus or penalty applies. A [Nil bid](/game/blind-nil) is a separate bid type (`"nil"` in the API) that carries a +50/−50 scoring outcome. A [Blind Nil bid](/game/blind-nil) is submitted as `"blind_nil"` in the API and is subject to eligibility rules.
 
 **Bidding order:** Bidding starts with the player to the dealer's left and proceeds clockwise around the table. The second team member to bid always sees their partner's bid before they act.
 
@@ -71,10 +71,13 @@ The winner of each trick leads the next one.
 
 ### First Trick Restriction
 
-On the very first trick of a hand, a Spade **may not be played** even if a player has no cards in the led suit. If a player has nothing but Spades when they cannot follow suit on trick one, only then may they play a Spade. Leading a Spade on the first trick is never allowed.
+On the very first trick of a hand, Spades are restricted — both when leading and when unable to follow suit:
+
+- **Leading:** A player may not lead a Spade on the first trick. The only exception is if the player's entire hand consists of Spades, in which case a Spade lead is permitted.
+- **Following (can't follow suit):** If a player cannot follow the led suit on the first trick, they may not play a Spade as long as they hold any non-Spade card. Only if their remaining hand is entirely Spades may they play one.
 
 <Warning>
-  The first-trick Spade restriction is enforced server-side. The server's `getLegalPlays` function filters Spades from the legal-play set on trick one whenever a non-Spade alternative exists.
+  The first-trick Spade restriction is enforced server-side. The server's `getLegalPlays` function filters Spades from the legal-play set on trick one whenever a non-Spade alternative exists — this applies to both leads and discards.
 </Warning>
 
 ## Game End
@@ -106,7 +109,7 @@ See [Create Table](/api/tables/create) for the full API reference, including how
 When a human player leaves a game in progress, the server immediately replaces their seat with a bot so the hand can continue without interruption.
 
 <Accordion title="How bots bid">
-  Bots count the number of Spades in their hand and bid that number. When a bot is the **second bidder** for its team, it adds the partner's bid to its own Spades count to produce the correct team total — for example, if the partner bid 3 and the bot holds 4 Spades, the bot bids a team total of 7.
+  Bots count the number of Spades in their hand and bid that number. When a bot is the **second bidder** for its team, it adds the partner's bid to its own Spades count to produce the correct team total — for example, if the partner bid 3 and the bot holds 4 Spades, the bot bids a team total of 7. If the partner bid Nil or Blind Nil (not a number), the bot falls back to bidding only its own Spades count.
 
   Bots **never** bid Nil or Blind Nil.
 </Accordion>

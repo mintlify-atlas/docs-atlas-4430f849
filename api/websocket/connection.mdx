@@ -1,5 +1,5 @@
 ---
-title: "Connect to the Spades Online WebSocket Server"
+title: "Spades Online WebSocket: Connect and Authenticate"
 sidebarTitle: "Connection"
 description: "Authenticate, connect, and subscribe to table rooms and the lobby channel over WebSocket. Messages use JSON envelopes with type and payload fields."
 ---
@@ -128,14 +128,14 @@ If a `JOIN` request is rejected, the server sends a `JOIN_DENIED` message instea
   "type": "JOIN_DENIED",
   "payload": {
     "tableId": "<uuid>",
-    "reason": "not_seated" | "table_not_found" | "error"
+    "reason": "not_seated_or_observing" | "table_not_found" | "error"
   }
 }
 ```
 
 | Reason | Meaning |
 |---|---|
-| `not_seated` | The authenticated player is neither seated at nor observing the table. |
+| `not_seated_or_observing` | The authenticated player is neither seated at nor observing the table. |
 | `table_not_found` | No table with the given `tableId` exists. |
 | `error` | An internal error occurred (e.g. Redis unavailable). |
 

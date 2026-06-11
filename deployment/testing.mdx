@@ -1,5 +1,5 @@
 ---
-title: "Testing Spades Online: Unit, Integration, and WebSocket Tests"
+title: "Testing Spades Online: Unit, Integration, and WebSocket"
 sidebarTitle: "Testing"
 description: "How to run the Spades Online test suite: unit tests (no external services), integration tests (PostgreSQL required), and WebSocket event tests."
 ---
@@ -15,7 +15,7 @@ npm test
 This runs `node --test 'test/**/*.test.js'`, which discovers and executes every test file matching the glob pattern.
 
 <Note>
-  **Unit tests always run.** Integration tests are automatically skipped when `DATABASE_URL` is not set in the environment. Integration tests that also require Redis are skipped when `REDIS_URL` is not set. You can run the full unit suite locally without any external services.
+  **Unit tests always run.** Integration tests are automatically skipped when `DATABASE_URL` is not set in the environment. You can run the full unit suite locally without any external services.
 </Note>
 
 To run tests with integration coverage, export the required connection strings first:

@@ -1,7 +1,7 @@
 ---
-title: "Create a New Table in Spades Online"
+title: "Create a Multiplayer Spades Table via POST /api/tables"
 sidebarTitle: "Create Table"
-description: "POST /api/tables creates a new game table. Configure visibility (public/friends-only/private), join policy, and spectating. Returns the tableId on success."
+description: "POST /api/tables creates a new game table. Set visibility, join policy, and spectating. Host is auto-seated at north. Returns tableId on success."
 ---
 
 Any authenticated player can create a table. The creating player immediately becomes the host and is automatically seated in the **north** seat. The other three seats (`east`, `south`, `west`) start empty and can be filled by other players, bots, or a mix of both. A game begins automatically once all four seats are occupied.
@@ -61,7 +61,7 @@ The `joinPolicy` must be compatible with the selected `visibility`. Sending an i
     The table does **not** appear in the public lobby. Instead, a `TABLE_CREATED` event is sent directly to the personal notification channel of each of the host's friends when the table is created (or when visibility is changed to `friends-only`). Friends see it in their friends list. Players who are not friends with the host cannot find or join the table unless they receive a direct join link or in-app invite.
   </Tab>
   <Tab title="private">
-    The table produces **no** lobby or friend-list notifications. It is completely unlisted. Only players who receive an explicit join link (`GET /api/tables/:tableId/join-link`) or an in-app invite (`POST /api/tables/:tableId/invite`) from the host can access it.
+    The table produces **no** lobby or friend-list notifications. It is completely unlisted. Only players who receive an explicit join link (`POST /api/tables/:tableId/join-link`) or an in-app invite (`POST /api/tables/:tableId/invite`) from the host can access it.
   </Tab>
 </Tabs>
 
